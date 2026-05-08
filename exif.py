@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 try:
     from PIL import Image as _PILImage
     _PILImage.MAX_IMAGE_PIXELS = None  # pragma: no cover
-except ImportError:
+except ImportError:  # pragma: no cover
     pass
 
 # ── Field priority lists ───────────────────────────────────────────────────
@@ -49,14 +49,18 @@ except ImportError:
 # were shot.
 IMAGE_DATE_FIELDS: list[str] = [
     "DateTimeOriginal",
-    "GPS Date Stamp",
+    "GPSDateStamp",        # from GPS IFD via GPSTAGS — field 29
     "Image Generated",
     "CreateDate",
     "Image Digitized",
     "DateTimeDigitized",
 ]
 
-IMAGE_DATE_FIELDS_IGNORE: frozenset[str] = frozenset(["Camera Date", "DateTime"])
+IMAGE_DATE_FIELDS_IGNORE: frozenset[str] = frozenset([
+    "Camera Date",
+    "DateTime",
+    "XMLPacket",           # raw XMP blob — never contains a parseable date on its own
+])
 
 # ExifTool namespaced tags — ordered strictly from most- to least-authoritative
 # capture/creation date.  Modify-date fields are explicitly excluded.
@@ -164,25 +168,32 @@ class ImageExifReader(ExifReaderBase):
     def get_raw(self, path: Path) -> dict:
         try:
             from PIL import Image
-            from PIL.ExifTags import TAGS
+            from PIL.ExifTags import TAGS, GPSTAGS
 
             with Image.open(path) as image:
                 info = image.getexif()
-            if not info:
-                return {}
+                if not info:
+                    return {}
 
-            # Main IFD (IFD 0) — contains DateTime, Make, Model, etc.
-            raw = {TAGS.get(tag, tag): value for tag, value in info.items()}
+                # Main IFD (IFD 0) — contains DateTime, Make, Model, etc.
+                raw = {TAGS.get(tag, tag): value for tag, value in info.items()}
 
-            # Exif SubIFD (tag 34665) — contains DateTimeOriginal,
-            # DateTimeDigitized, etc.  Pillow does NOT include these when
-            # iterating getexif() directly; get_ifd() is required.
-            exif_ifd = info.get_ifd(0x8769)  # 0x8769 == 34665
-            raw.update({TAGS.get(tag, tag): value for tag, value in exif_ifd.items()})
+                # Exif SubIFD (tag 34665) — contains DateTimeOriginal,
+                # DateTimeDigitized, etc.  Pillow does NOT include these when
+                # iterating getexif() directly; get_ifd() is required.
+                # get_ifd() must be called while the file is still open —
+                # TIFF-based formats (CR2, TIF) use lazy loading and fail if
+                # the file has been closed before the sub-IFD is read.
+                exif_ifd = info.get_ifd(0x8769)  # 0x8769 == 34665
+                raw.update({TAGS.get(tag, tag): value for tag, value in exif_ifd.items()})
 
-            # GPS IFD (tag 34853) — contains GPSDateStamp
-            gps_ifd = info.get_ifd(0x8825)   # 0x8825 == 34853
-            raw.update({TAGS.get(tag, tag): value for tag, value in gps_ifd.items()})
+                # GPS IFD (tag 34853) — contains GPSDateStamp (tag 29).
+                # GPS tags have their own name table (GPSTAGS), distinct from
+                # the main EXIF TAGS dict.  Using TAGS here would leave every
+                # GPS entry as a bare integer key, so GPSDateStamp would never
+                # be found by name.
+                gps_ifd = info.get_ifd(0x8825)   # 0x8825 == 34853
+                raw.update({GPSTAGS.get(tag, tag): value for tag, value in gps_ifd.items()})
 
             return raw
         except OSError:

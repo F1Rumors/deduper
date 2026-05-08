@@ -353,8 +353,8 @@ class TestMediaFileDelete(unittest.TestCase):
         self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
 
     def test_delete_removes_file(self):
-        mf = make_image(self.tmp, "photo.jpg")
-        registry = MediaRegistry(make_cfg())
+        mf = make_image(self.tmp, "photo.jpg", dryrun=False)
+        registry = MediaRegistry(make_cfg(dryrun=False))
         mf.delete(registry)
         self.assertFalse((self.tmp / "photo.jpg").exists())
         self.assertTrue(mf.deleted)
@@ -392,7 +392,7 @@ class TestMediaFileFixDate(unittest.TestCase):
         d = date(2023, 8, 14)
         reader = MagicMock()
         reader.get_date.return_value = d
-        cfg = make_cfg(photos_path=self.photos)
+        cfg = make_cfg(photos_path=self.photos, dryrun=False)
         mf = ImageFile(src, "photo.jpg", cfg, exif_reader=reader)
         registry = MediaRegistry(cfg)
         dir_cache = DirCache()
@@ -439,7 +439,7 @@ class TestMediaFileFixDate(unittest.TestCase):
         d = date(2023, 8, 14)
         reader = MagicMock()
         reader.get_date.return_value = d
-        cfg = make_cfg(photos_path=self.photos)
+        cfg = make_cfg(photos_path=self.photos, dryrun=False)
         mf = ImageFile(src, "photo.jpg", cfg, exif_reader=reader)
         registry = MediaRegistry(cfg)
         dir_cache = DirCache()
@@ -568,6 +568,22 @@ class TestMediaRegistry(unittest.TestCase):
         registry = MediaRegistry(make_cfg())
         mf = registry.get_or_create(self.tmp, "audio.mp3")
         self.assertIsNone(mf)
+
+    def test_unknown_extension_recorded_with_count(self):
+        """Unrecognised (non-ignored) extensions must be tracked in a count dict."""
+        self._make_file("report.docx")
+        self._make_file("notes.docx")
+        registry = MediaRegistry(make_cfg())
+        registry.get_or_create(self.tmp, "report.docx")
+        registry.get_or_create(self.tmp, "notes.docx")
+        self.assertEqual(registry._unknown_extensions.get("docx"), 2)
+
+    def test_ignored_extensions_not_in_unknown(self):
+        """Known-ignored extensions (audio, .thm, etc.) must NOT enter _unknown_extensions."""
+        self._make_file("audio.mp3")
+        registry = MediaRegistry(make_cfg())
+        registry.get_or_create(self.tmp, "audio.mp3")
+        self.assertNotIn("mp3", registry._unknown_extensions)
 
     def test_returns_none_for_no_extension(self):
         self._make_file("README")
@@ -768,7 +784,7 @@ class TestRelocateCollision(unittest.TestCase):
 
     def test_collision_renames_with_force(self):
         mf, _, src = self._make_collision()
-        cfg = make_cfg(photos_path=self.photos, do_force=True)
+        cfg = make_cfg(photos_path=self.photos, do_force=True, dryrun=False)
         mf._config = cfg
         registry = MediaRegistry(cfg)
         msg = mf.fix_date(registry, DirCache())
@@ -781,7 +797,7 @@ class TestRelocateCollision(unittest.TestCase):
         overflow = self.tmp / "overflow"
         overflow.mkdir()
         mf, _, src = self._make_collision()
-        cfg = make_cfg(photos_path=self.photos, misdated_path=overflow)
+        cfg = make_cfg(photos_path=self.photos, misdated_path=overflow, dryrun=False)
         mf._config = cfg
         registry = MediaRegistry(cfg)
         msg = mf.fix_date(registry, DirCache(), overflow_path=overflow)
@@ -915,7 +931,7 @@ class TestRelocateSelfDeletion(unittest.TestCase):
 
         reader = MagicMock()
         reader.get_date.return_value = date(2023, 8, 14)
-        cfg = make_cfg(photos_path=self.photos)
+        cfg = make_cfg(photos_path=self.photos, dryrun=False)
         mf = ImageFile(src_dir, "photo.jpg", cfg, exif_reader=reader)
         registry = MediaRegistry(cfg)
 

@@ -195,7 +195,10 @@ def cmd_get_date(paths: list[Path], config: Config) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    config = Config.from_args(args)
+    try:
+        config = Config.from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     start = time.monotonic()
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import configparser
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -33,13 +34,12 @@ class Config:
     do_load: bool = False       # Import media from import_path
     do_dupes: bool = False      # Detect / remove duplicates
     do_validate: bool = False   # Detect / fix misplaced files
-    do_fix: bool = False        # Actually perform destructive changes
     do_force: bool = False      # Rename on collision rather than skip
     do_compare_exif: bool = False  # Report EXIF differences between backends
 
     # ── Behaviour flags ────────────────────────────────────────────────────
     debug: bool = False
-    dryrun: bool = False
+    dryrun: bool = True          # False only when --fix is explicitly passed
     parallel: bool = False
 
     # ── Parallelism ────────────────────────────────────────────────────────
@@ -99,11 +99,16 @@ class Config:
         if args.loadpath:
             cfg.import_path = Path(args.loadpath)
 
+        # --fix opts into real changes; --debug/--dryrun override it back to True
+        if args.fix:
+            cfg.dryrun = False
+
         # Debug/dryrun — command line only (config file variant applied above)
         if args.debug:
             cfg.debug = True
             cfg.dryrun = True
             logging.getLogger().setLevel(logging.DEBUG)
+            logging.getLogger("PIL").setLevel(logging.INFO)
         if args.dryrun:
             cfg.dryrun = True
 
@@ -113,7 +118,6 @@ class Config:
         )
         cfg.do_dupes = bool(args.dupes or cfg.do_dupes)
         cfg.do_validate = bool(args.validate or cfg.do_validate)
-        cfg.do_fix = args.fix
         cfg.do_force = args.force
         cfg.do_compare_exif = args.compareExif
         cfg.do_exif = args.exif
@@ -123,12 +127,18 @@ class Config:
         cfg.diagnostic_paths = [Path(p) for p in args.paths] if args.paths else []
 
         if args.exiftool:
+            if not Path(args.exiftool).is_file():
+                raise ValueError(f"--exiftool: not a regular file: {args.exiftool!r}")
             cfg.exiftool_executable = args.exiftool
 
         # Exclusions — CLI completely replaces the config-file / default value
         if args.exclude_dir:
             cfg.exclude_dirs = frozenset(args.exclude_dir)
         if args.exclude_re:
+            try:
+                re.compile(args.exclude_re)
+            except re.error as exc:
+                raise ValueError(f"--exclude-re: invalid regex: {exc}") from exc
             cfg.exclude_files_re = args.exclude_re
 
         return cfg
@@ -143,7 +153,7 @@ class Config:
     # ------------------------------------------------------------------
 
     def _apply_config_file(self, path: str) -> None:
-        parser = configparser.ConfigParser()
+        parser = configparser.RawConfigParser()
         parser.read(path)
 
         if "LOCATIONS" in parser:

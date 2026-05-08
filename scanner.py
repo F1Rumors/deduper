@@ -118,6 +118,12 @@ class MediaScanner:
         self._report = report or Report()
         self._registry = registry or MediaRegistry(config)
         self._dir_cache = dir_cache or DirCache()
+        # Keyed by frozenset of root paths.  Each entry holds the walked file
+        # list plus both pre-classified groupings so subsequent actions on the
+        # same roots skip the walk and the classify pass entirely.
+        # Deleted files are evicted via _evict_from_scan rather than disabling
+        # the cache for --fix runs.
+        self._scan_cache: dict[frozenset, dict] = {}
 
     @property
     def report(self) -> Report:
@@ -130,34 +136,43 @@ class MediaScanner:
         if not self._cfg.import_path:
             self._report("Load skipped: no import path configured")
             return
-        dated = self._collect([self._cfg.import_path], size_matters=False, only_invalid=False)
+        dated = self._collect([self._cfg.import_path])
         n = sum(len(v) for v in dated.values())
         self._report(f"Importing {n} files")
+        n_imported = n_errors = 0
         for dt, files in dated.items():
             self._report(f"  {dt}: {len(files)} file(s)")
             for mf in files:
                 msg = mf.fix_date(self._registry, self._dir_cache)
                 if msg:
                     self._report(f"    {msg}")
+                    n_errors += 1
+                else:
+                    n_imported += 1
+        if self._cfg.debug:
+            self._report(
+                f"\nLoad summary: {n_imported:,d} imported, {n_errors:,d} error(s)/skipped"
+            )
 
     def run_dupes(self) -> None:
         """Find (and optionally remove) duplicate files."""
         roots = [r for r in (self._cfg.photos_path, self._cfg.videos_path) if r]
-        by_size = self._collect(roots, size_matters=True, only_invalid=False)
+        entry = self._scan(roots)
         candidates = list(itertools.chain.from_iterable(
-            files for files in by_size.values() if len(files) > 1
+            files for files in entry['by_size'].values() if len(files) > 1
         ))
         if not candidates:
             self._report("No duplicates found")
             return
 
+        cache_key = frozenset(roots)
         dupes = self._find_dupes(candidates)
-        self._report_and_remove_dupes(dupes)
+        self._report_and_remove_dupes(dupes, cache_key)
 
     def run_validate(self) -> None:
         """Find (and optionally fix) misplaced files."""
         roots = [r for r in (self._cfg.photos_path, self._cfg.videos_path) if r]
-        misplaced = self._collect(roots, size_matters=False, only_invalid=True)
+        misplaced = self._scan(roots)['by_misplaced']
         if not misplaced:
             self._report("No misplaced files found")
             return
@@ -244,42 +259,62 @@ class MediaScanner:
                 self._report(f"    currently: {mf.path.parent}")
                 self._report(f"    should be: {expected}")
 
-        if not self._cfg.do_fix:
+        # ── Debug: expected fix outcomes (computed without touching disk) ────
+        if self._cfg.debug:
+            outcomes = self._count_expected_outcomes(dateable)
+            parts = []
+            if outcomes['relocate']:
+                parts.append(f"{outcomes['relocate']:,d} would relocate")
+            if outcomes['remove_dup']:
+                parts.append(f"{outcomes['remove_dup']:,d} would remove as duplicate")
+            if outcomes['overflow']:
+                parts.append(f"{outcomes['overflow']:,d} would send to overflow dir")
+            if outcomes['skip']:
+                parts.append(f"{outcomes['skip']:,d} would skip (collision/no root)")
+            self._report("\nExpected fix outcomes: " + (", ".join(parts) if parts else "none"))
+
+        if self._cfg.dryrun:
             return
+
+        # ── Fix loop with outcome tracking ──────────────────────────────────
+        n_relocated = n_to_overflow = n_removed_dup = n_errors = 0
         for mf in itertools.chain.from_iterable(misplaced.values()):
+            expected_dir = mf._normalised_directory
             try:
                 msg = mf.fix_date(self._registry, self._dir_cache)
             except Exception as exc:
                 self._report(f"Error relocating {mf.path}: {exc}")
                 logger.error("Unexpected error relocating %s: %s", mf.path, exc)
+                n_errors += 1
                 continue
             if msg:
                 self._report(msg)
+                msg_l = msg.lower()
+                if "removed duplicate" in msg_l:
+                    n_removed_dup += 1
+                elif any(kw in msg_l for kw in (
+                    "error", "cannot", "missing", "collision", "same as source", "skipping"
+                )):
+                    n_errors += 1
+                # dryrun and other informational messages → not counted as fix outcomes
+            else:
+                # None → actual move occurred (impossible in dryrun mode)
+                if expected_dir and mf.directory.resolve() == expected_dir.resolve():
+                    n_relocated += 1
+                else:
+                    n_to_overflow += 1
 
-    # ── Collection ─────────────────────────────────────────────────────────
+        self._report(
+            f"\nFix summary: {n_relocated:,d} relocated, "
+            f"{n_to_overflow:,d} sent to overflow dir, "
+            f"{n_removed_dup:,d} removed as duplicate, "
+            f"{n_errors:,d} error(s)"
+        )
 
-    def _collect(
-        self,
-        roots: list[Path],
-        size_matters: bool,
-        only_invalid: bool,
-    ) -> dict:
-        """Walk *roots* and accumulate ``MediaFile`` objects.
+    # ── Walk ───────────────────────────────────────────────────────────────
 
-        Three phases:
-
-        1. **Walk** — discover files and build ``MediaFile`` objects (serial;
-           directory I/O does not benefit from parallelism on a NAS).
-        2. **EXIF prefetch** — if ``parallel`` is set, read image EXIF dates
-           across a worker pool.  Video EXIF (ExifTool) is deliberately kept
-           serial: the subprocess is CPU-heavy and does not survive fork.
-        3. **Classify** — group results by size or date.
-
-        :param size_matters:  Key by file size (for dupe pre-filter).
-        :param only_invalid:  Key by date, include only misplaced files.
-        :returns:             ``{key: [MediaFile, ...]}``
-        """
-        # Phase 1 — walk
+    def _do_walk(self, roots: list[Path]) -> list[MediaFile]:
+        """Walk *roots* and return all recognised ``MediaFile`` objects."""
         print(f"Scanning {roots} ...")
         sys.stdout.flush()
         all_files: list[MediaFile] = []
@@ -294,23 +329,156 @@ class MediaScanner:
             if walked % 5000 == 0:  # pragma: no cover
                 print(f"\r  Walked {walked:,d} files...", end="", flush=True)
         print(f"\r  Walked {walked:,d} files, {len(all_files):,d} recognised media", flush=True)
+        if self._cfg.debug and self._registry._unknown_extensions:
+            parts = sorted(
+                f".{ext} ({n:,d})"
+                for ext, n in self._registry._unknown_extensions.items()
+            )
+            self._report(f"\nIgnored files with unrecognised extensions: {', '.join(parts)}")
+        return all_files
 
-        # Phase 2 — EXIF prefetch
+    # ── Shared scan (dupes + validate) ────────────────────────────────────
+
+    def _scan(self, roots: list[Path]) -> dict:
+        """Walk *roots* once and build groupings for whichever actions are active.
+
+        ``by_size`` is always built (needed for dupes pre-filter).
+        ``by_misplaced`` is only built when ``do_validate`` is True — this
+        avoids reading EXIF dates for every file during a dupes-only run.
+
+        Results are cached by root set.  If ``run_validate`` is called after
+        ``run_dupes`` on the same roots, the misplaced grouping is built
+        lazily from the already-walked ``all_files`` list without re-walking.
+        """
+        cache_key = frozenset(roots)
+        if cache_key in self._scan_cache:
+            entry = self._scan_cache[cache_key]
+            if self._cfg.do_validate and not entry['misplaced_classified']:
+                self._classify_misplaced(entry)
+            print(f"Reusing cached scan ({len(entry['all_files']):,d} files)")
+            sys.stdout.flush()
+            return entry
+
+        all_files = self._do_walk(roots)
+
         if self._cfg.parallel:
             self._prefetch_image_dates(all_files)   # fork-safe (Pillow), uses Pool
             self._prefetch_video_dates(all_files)   # batch ExifTool (one subprocess call)
 
-        # Phase 3 — classify (video EXIF already warm if parallel, otherwise lazy)
+        by_size: dict[int, list[MediaFile]] = defaultdict(list)
+        n_all = len(all_files)
+        for i, mf in enumerate(all_files):
+            by_size[mf.size].append(mf)
+            if (i + 1) % 1000 == 0:  # pragma: no cover
+                print(f"\r  Sizing {i + 1:,d}/{n_all:,d}...", end="", flush=True)
+        print(f"\r  Sized {n_all:,d} files")
+        sys.stdout.flush()
+
+        entry = {
+            'all_files': all_files,
+            'by_size': dict(by_size),
+            'by_misplaced': {},
+            'misplaced_classified': False,
+        }
+        self._scan_cache[cache_key] = entry
+
+        if self._cfg.do_validate:
+            self._classify_misplaced(entry)
+
+        return entry
+
+    def _classify_misplaced(self, entry: dict) -> None:
+        """Build the ``by_misplaced`` grouping from ``all_files`` in *entry*.
+
+        Reads EXIF dates for every file; called only when ``do_validate`` is
+        True.  Safe to call on a cache entry that was populated by a
+        dupes-only scan — no re-walk is needed.
+        """
+        by_misplaced: dict = defaultdict(list)
+        all_files = entry['all_files']
+        n_all = len(all_files)
+        for i, mf in enumerate(all_files):
+            if mf.validate():
+                by_misplaced[mf.dated].append(mf)
+            if (i + 1) % 1000 == 0:  # pragma: no cover
+                print(f"\r  Classifying {i + 1:,d}/{n_all:,d}...", end="", flush=True)
+        n_misplaced = sum(len(v) for v in by_misplaced.values())
+        print(f"\r  Classified {n_all:,d} files — {n_misplaced:,d} misplaced")
+        sys.stdout.flush()
+        entry['by_misplaced'] = dict(by_misplaced)
+        entry['misplaced_classified'] = True
+
+    def _count_expected_outcomes(self, files: list[MediaFile]) -> dict[str, int]:
+        """Predict what fix_date would do for each file without making changes.
+
+        Returns counts keyed by outcome:
+        * ``relocate``   — target path is free; file would move there.
+        * ``remove_dup`` — identical file already at target; source would be deleted.
+        * ``overflow``   — collision at target with different content; file would go
+                           to ``misdated_path`` (if configured).
+        * ``skip``       — collision with no overflow, or no target root; no action.
+        """
+        counts: dict[str, int] = {'relocate': 0, 'remove_dup': 0, 'overflow': 0, 'skip': 0}
+        for mf in files:
+            expected = mf._normalised_directory
+            if expected is None:
+                counts['skip'] += 1
+                continue
+            target = expected / mf.filename
+            if target.exists():
+                existing = self._registry.get_or_create(expected, mf.filename)
+                if existing and mf.hash == existing.hash:
+                    counts['remove_dup'] += 1
+                elif self._cfg.misdated_path:
+                    counts['overflow'] += 1
+                else:
+                    counts['skip'] += 1
+            else:
+                counts['relocate'] += 1
+        return counts
+
+    def _evict_from_scan(self, cache_key: frozenset, mf: MediaFile) -> None:
+        """Remove *mf* from all cached structures after it has been deleted."""
+        entry = self._scan_cache.get(cache_key)
+        if not entry:
+            return
+        try:
+            entry['all_files'].remove(mf)
+        except ValueError:
+            pass
+        size_group = entry['by_size'].get(mf.size)
+        if size_group:
+            try:
+                size_group.remove(mf)
+            except ValueError:
+                pass
+        misplaced_group = entry['by_misplaced'].get(mf.dated)
+        if misplaced_group:
+            try:
+                misplaced_group.remove(mf)
+            except ValueError:
+                pass
+
+    # ── Collection (run_load only) ─────────────────────────────────────────
+
+    def _collect(self, roots: list[Path]) -> dict:
+        """Walk *roots* and group by date.
+
+        Used by ``run_load`` for import-path walks (not cached, different roots
+        and semantics from the photos/videos scan).
+
+        :returns: ``{date_or_None: [MediaFile, ...]}``
+        """
+        all_files = self._do_walk(roots)
+
+        if self._cfg.parallel:
+            self._prefetch_image_dates(all_files)
+            self._prefetch_video_dates(all_files)
+
         result: dict = defaultdict(list)
         n_all = len(all_files)
         for i, mf in enumerate(all_files):
-            if size_matters:
-                result[mf.size].append(mf)
-            elif only_invalid:
-                if mf.validate():
-                    result[mf.dated].append(mf)
-            else:
-                result[mf.dated].append(mf)
+            result[mf.dated].append(mf)
             if (i + 1) % 1000 == 0:  # pragma: no cover
                 print(f"\r  Classifying {i + 1:,d}/{n_all:,d}...", end="", flush=True)
 
@@ -445,14 +613,18 @@ class MediaScanner:
         return {k: sorted(v) for k, v in groups.items() if len(v) > 1}
 
     def _report_and_remove_dupes(
-        self, dupes: dict[tuple, list[MediaFile]]
+        self,
+        dupes: dict[tuple, list[MediaFile]],
+        cache_key: frozenset = frozenset(),
     ) -> None:
         if not dupes:
             self._report("No exact duplicates found")
             return
 
-        self._report(f"Found {len(dupes)} duplicate group(s):")
-        dryrun_or_report_only = self._cfg.dryrun or not self._cfg.do_fix
+        n_redundant = sum(len(group) - 1 for group in dupes.values())
+        self._report(f"Found {len(dupes)} duplicate group(s), {n_redundant:,d} redundant file(s):")
+        dryrun_or_report_only = self._cfg.dryrun
+        n_removed = 0
 
         for key, group in dupes.items():
             keeper = group[0]
@@ -464,3 +636,17 @@ class MediaScanner:
                 else:
                     self._report(f"    Removing: {mf}")
                     mf.delete(self._registry)
+                    self._evict_from_scan(cache_key, mf)
+                    n_removed += 1
+
+        if self._cfg.debug:
+            if dryrun_or_report_only:
+                self._report(
+                    f"\nDupes summary: {len(dupes)} group(s), "
+                    f"{n_redundant:,d} redundant — not removed (dryrun/report-only)"
+                )
+            else:
+                self._report(
+                    f"\nDupes summary: {len(dupes)} group(s), "
+                    f"{n_removed:,d} of {n_redundant:,d} redundant file(s) removed"
+                )

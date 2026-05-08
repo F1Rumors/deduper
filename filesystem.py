@@ -66,6 +66,8 @@ def safe_filename(directory: Path, filename: str) -> str:
 
     :raises RuntimeError: If no free slot is found within 999 attempts.
     """
+    if "/" in filename or "\\" in filename:
+        raise ValueError(f"Filename must not contain path separators: {filename!r}")
     if "." not in filename:
         raise ValueError(f"Filename has no extension: {filename!r}")
 

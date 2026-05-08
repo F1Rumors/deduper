@@ -25,10 +25,9 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertFalse(cfg.do_load)
         self.assertFalse(cfg.do_dupes)
         self.assertFalse(cfg.do_validate)
-        self.assertFalse(cfg.do_fix)
         self.assertFalse(cfg.do_force)
         self.assertFalse(cfg.debug)
-        self.assertFalse(cfg.dryrun)
+        self.assertTrue(cfg.dryrun)
         self.assertFalse(cfg.parallel)
         self.assertEqual(cfg.pool_size, 4)
         self.assertEqual(cfg.pool_chunksize, 100)
@@ -43,7 +42,6 @@ class TestConfigFromDefaults(unittest.TestCase):
         cfg = Config.from_defaults(debug=True, dryrun=True)
         self.assertTrue(cfg.debug)
         self.assertTrue(cfg.dryrun)
-        self.assertFalse(cfg.do_fix)
 
     def test_override_paths(self):
         cfg = Config.from_defaults(photos_path=Path("/photos"), videos_path=Path("/videos"))
@@ -138,9 +136,24 @@ class TestConfigFromArgs(unittest.TestCase):
 
     def test_exiftool_flag_sets_executable(self):
         """--exiftool should propagate to cfg.exiftool_executable."""
-        args = self._make_args(exiftool="/opt/exiftool/exiftool")
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            exe_path = f.name
+        self.addCleanup(os.unlink, exe_path)
+        args = self._make_args(exiftool=exe_path)
         cfg = Config.from_args(args)
-        self.assertEqual(cfg.exiftool_executable, "/opt/exiftool/exiftool")
+        self.assertEqual(cfg.exiftool_executable, exe_path)
+
+    def test_exiftool_flag_rejects_missing_path(self):
+        """--exiftool with a non-existent path should raise ValueError."""
+        args = self._make_args(exiftool="/no/such/exiftool")
+        with self.assertRaises(ValueError, msg="--exiftool"):
+            Config.from_args(args)
+
+    def test_exclude_re_invalid_regex_raises(self):
+        """--exclude-re with a bad regex should raise ValueError."""
+        args = self._make_args(exclude_re="[invalid(")
+        with self.assertRaises(ValueError, msg="--exclude-re"):
+            Config.from_args(args)
 
 
 class TestConfigFromFile(unittest.TestCase):

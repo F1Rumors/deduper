@@ -81,6 +81,14 @@ class TestSafeFilename(unittest.TestCase):
         with self.assertRaises(ValueError):
             safe_filename(self.tmp, "noextension")
 
+    def test_forward_slash_in_filename_raises(self):
+        with self.assertRaises(ValueError):
+            safe_filename(self.tmp, "subdir/photo.jpg")
+
+    def test_backslash_in_filename_raises(self):
+        with self.assertRaises(ValueError):
+            safe_filename(self.tmp, "subdir\\photo.jpg")
+
     def test_preserves_extension_case(self):
         result = safe_filename(self.tmp, "photo.JPG")
         self.assertIn(".JPG", result)

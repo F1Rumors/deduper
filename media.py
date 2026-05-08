@@ -318,7 +318,9 @@ class MediaFile:
         if not self.path.exists():
             return f"Source file missing: {self.path}"
 
-        if not self._config.dryrun:
+        no_changes = self._config.dryrun
+
+        if not no_changes:
             dir_cache.ensure(target_dir)
             if not os.access(target_dir, os.W_OK):  # pragma: no cover
                 return f"Cannot write to target directory {target_dir}"
@@ -329,7 +331,7 @@ class MediaFile:
             existing = registry.get_or_create(target_dir, self._filename)
             if existing and self.hash == existing.hash:
                 # Exact duplicate — delete self
-                if self._config.dryrun:
+                if no_changes:
                     self._deleted = True
                     return f"dryrun: {self} is a duplicate of {target_path} — would delete"
                 self.delete(registry)
@@ -347,7 +349,7 @@ class MediaFile:
                     f"(use --force to rename)"
                 )
 
-        if self._config.dryrun:
+        if no_changes:
             return f"dryrun: would move {self.path} → {target_path}"
 
         registry.move(self, target_dir, target_path.name)
@@ -424,7 +426,7 @@ class MediaRegistry:
         self._mediainfo_reader = MediaInfoReader() if MediaInfoReader.available() else None
         if self._mediainfo_reader:
             logger.debug("MediaInfo available — will use as video fallback")
-        self._unknown_extensions: set[str] = set()
+        self._unknown_extensions: dict[str, int] = {}  # ext → file count
 
     def get_or_create(self, directory: Path, filename: str) -> Optional[MediaFile]:
         """Return the ``MediaFile`` for ``directory/filename``, creating it on
@@ -448,9 +450,10 @@ class MediaRegistry:
             return ImageFile(directory, filename, self._config, self._image_reader)
         if ext in VIDEO_EXTENSIONS:
             return VideoFile(directory, filename, self._config, self._video_reader, self._mediainfo_reader)
-        if ext not in IGNORED_EXTENSIONS and ext not in self._unknown_extensions:
-            logger.info("Unsupported extension ignored: .%s (%s)", ext, filename)
-            self._unknown_extensions.add(ext)
+        if ext not in IGNORED_EXTENSIONS:
+            if ext not in self._unknown_extensions:
+                logger.info("Unsupported extension ignored: .%s (%s)", ext, filename)
+            self._unknown_extensions[ext] = self._unknown_extensions.get(ext, 0) + 1
         return None
 
     def evict(self, path: Path) -> None:

@@ -23,11 +23,11 @@ def make_cfg(**kwargs) -> Config:
     return Config.from_defaults(**kwargs)
 
 
-def make_image_file(tmp: Path, filename: str, exif_date=None, content=b"data") -> ImageFile:
+def make_image_file(tmp: Path, filename: str, exif_date=None, content=b"data", cfg=None) -> ImageFile:
     (tmp / filename).write_bytes(content)
     reader = MagicMock()
     reader.get_date.return_value = exif_date
-    return ImageFile(tmp, filename, make_cfg(), exif_reader=reader)
+    return ImageFile(tmp, filename, cfg or make_cfg(), exif_reader=reader)
 
 
 def make_mock_pool(imap_results=None):
@@ -190,7 +190,7 @@ class TestReportAndRemoveDupes(unittest.TestCase):
         dupes = {(mf1.size, mf1.hash): [mf1, mf2]}
 
         report = Report()
-        cfg = make_cfg(dryrun=True, do_fix=False)
+        cfg = make_cfg()
         registry = MediaRegistry(cfg)
         scanner = MediaScanner(config=cfg, report=report, registry=registry)
         scanner._report_and_remove_dupes(dupes)
@@ -200,14 +200,14 @@ class TestReportAndRemoveDupes(unittest.TestCase):
 
     def test_fix_deletes_redundant(self):
         data = b"y" * 200
-        mf1 = make_image_file(self.tmp, "a.jpg", content=data)
-        mf2 = make_image_file(self.tmp, "b.jpg", content=data)
+        fix_cfg = make_cfg(dryrun=False)
+        mf1 = make_image_file(self.tmp, "a.jpg", content=data, cfg=fix_cfg)
+        mf2 = make_image_file(self.tmp, "b.jpg", content=data, cfg=fix_cfg)
         dupes = {(mf1.size, mf1.hash): [mf1, mf2]}
 
         report = Report()
-        cfg = make_cfg(do_fix=True)
-        registry = MediaRegistry(cfg)
-        scanner = MediaScanner(config=cfg, report=report, registry=registry)
+        registry = MediaRegistry(fix_cfg)
+        scanner = MediaScanner(config=fix_cfg, report=report, registry=registry)
         scanner._report_and_remove_dupes(dupes)
 
         # Keeper (a.jpg, comes first alphabetically) should survive
@@ -221,7 +221,7 @@ class TestReportAndRemoveDupes(unittest.TestCase):
         dupes = {(mf1.size, mf1.hash): [mf1, mf2]}
 
         report = Report()
-        cfg = make_cfg(do_fix=False, dryrun=False)
+        cfg = make_cfg()
         registry = MediaRegistry(cfg)
         scanner = MediaScanner(config=cfg, report=report, registry=registry)
         scanner._report_and_remove_dupes(dupes)
@@ -259,6 +259,7 @@ class TestRunLoad(unittest.TestCase):
             import_path=self.inbox,
             photos_path=self.photos,
             do_load=True,
+            dryrun=False,
         )
         registry = MediaRegistry(cfg)
         dir_cache = DirCache()
@@ -418,7 +419,7 @@ class TestRunValidateDuplicateDetection(unittest.TestCase):
         """With --fix, the misplaced copy should be deleted; the correctly
         placed copy must survive."""
         mp, kp = self._setup_misplaced_with_duplicate()
-        cfg = make_cfg(photos_path=self.photos, do_validate=True, do_fix=True)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
         MediaScanner(config=cfg).run_validate()
         self.assertFalse(mp.exists(), "Duplicate at wrong location should be deleted")
         self.assertTrue(kp.exists(),  "Keeper at correct location must remain")
@@ -470,7 +471,7 @@ class TestImageExifWorker(unittest.TestCase):
         import tempfile
         try:
             from PIL import Image
-        except ImportError:
+        except ImportError:  # pragma: no cover
             self.skipTest("Pillow not available")
         from datetime import date as date_type
 
@@ -867,7 +868,7 @@ class TestRunValidateFixLoopContinuesOnError(unittest.TestCase):
         (wrong_dir / "IMG_2023-06-15.jpg").write_bytes(b"b" * 50)
 
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_validate=True, do_fix=True)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
         scanner = MediaScanner(config=cfg, report=report)
 
         call_count = [0]
@@ -891,6 +892,474 @@ class TestRunValidateFixLoopContinuesOnError(unittest.TestCase):
 
         # The report must contain a message about the error.
         self.assertIn("disk full", report.render())
+
+
+# ── Debug summaries ───────────────────────────────────────────────────────
+
+class TestDebugSummaries(unittest.TestCase):
+    """run_dupes, run_validate, and run_load emit summary lines in debug mode."""
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    # ── run_dupes ──────────────────────────────────────────────────────────
+
+    def test_dupes_debug_summary_dryrun(self):
+        """In debug (dryrun) mode, a summary line mentioning 'not removed' appears."""
+        d = self.photos / "2023" / "08" / "14"
+        d.mkdir(parents=True)
+        data = b"same" * 200
+        (d / "a.jpg").write_bytes(data)
+        (d / "b.jpg").write_bytes(data)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True, debug=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_dupes()
+        text = report.render()
+        self.assertIn("Dupes summary", text)
+        self.assertIn("not removed", text)
+
+    def test_dupes_debug_summary_fix(self):
+        """In debug+fix mode, the summary reports actual removal counts."""
+        d = self.photos / "2023" / "08" / "14"
+        d.mkdir(parents=True)
+        data = b"same" * 200
+        (d / "a.jpg").write_bytes(data)
+        (d / "b.jpg").write_bytes(data)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True, debug=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_dupes()
+        text = report.render()
+        self.assertIn("Dupes summary", text)
+        self.assertIn("removed", text)
+        self.assertNotIn("not removed", text)
+
+    def test_dupes_no_debug_no_summary(self):
+        """Without --debug, no 'Dupes summary' line appears."""
+        d = self.photos / "2023" / "08" / "14"
+        d.mkdir(parents=True)
+        data = b"same" * 200
+        (d / "a.jpg").write_bytes(data)
+        (d / "b.jpg").write_bytes(data)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True)
+        MediaScanner(config=cfg, report=report).run_dupes()
+        self.assertNotIn("Dupes summary", report.render())
+
+    # ── run_validate ───────────────────────────────────────────────────────
+
+    def test_validate_debug_expected_outcomes(self):
+        """In debug mode, expected fix outcomes appear before any actual fix."""
+        wrong = self.photos / "2020" / "01" / "01"
+        wrong.mkdir(parents=True)
+        (wrong / "IMG_2023-08-14.jpg").write_bytes(b"x" * 50)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("Expected fix outcomes", report.render())
+        self.assertIn("would relocate", report.render())
+
+    def test_validate_expected_outcomes_remove_dup(self):
+        """When the target already holds an identical file, expected outcome is remove_dup."""
+        wrong   = self.photos / "2020" / "01" / "01"
+        correct = self.photos / "2023" / "08" / "14"
+        wrong.mkdir(parents=True)
+        correct.mkdir(parents=True)
+        data = b"content" * 50
+        (wrong   / "IMG_2023-08-14.jpg").write_bytes(data)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(data)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("would remove as duplicate", report.render())
+
+    def test_validate_fix_summary_appears(self):
+        """After --fix, a fix summary line always appears (not debug-gated)."""
+        wrong   = self.photos / "2020" / "01" / "01"
+        wrong.mkdir(parents=True)
+        (wrong / "IMG_2023-08-14.jpg").write_bytes(b"data" * 20)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("Fix summary", report.render())
+        self.assertIn("relocated", report.render())
+
+    def test_validate_fix_summary_counts_overflow(self):
+        """Files that collide and go to the overflow dir are counted as 'overflow'."""
+        wrong   = self.photos / "2020" / "01" / "01"
+        correct = self.photos / "2023" / "08" / "14"
+        overflow = self.tmp / "overflow"
+        wrong.mkdir(parents=True)
+        correct.mkdir(parents=True)
+        overflow.mkdir()
+        # Different content at correct location → collision → file goes to overflow
+        (wrong   / "IMG_2023-08-14.jpg").write_bytes(b"version A" * 30)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(b"version B" * 30)
+
+        report = Report()
+        cfg = make_cfg(
+            photos_path=self.photos, do_validate=True, dryrun=False,
+            misdated_path=overflow,
+        )
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        self.assertIn("Fix summary", text)
+        self.assertIn("overflow", text)
+
+    # ── run_load ───────────────────────────────────────────────────────────
+
+    def test_load_debug_summary(self):
+        """In debug mode, run_load emits a load summary line."""
+        inbox  = self.tmp / "inbox"
+        inbox.mkdir()
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+
+        report = Report()
+        cfg = make_cfg(
+            import_path=inbox,
+            photos_path=self.photos,
+            do_load=True,
+            dryrun=False,
+            debug=True,
+        )
+        MediaScanner(config=cfg, report=report).run_load()
+        self.assertIn("Load summary", report.render())
+        self.assertIn("imported", report.render())
+
+    def test_load_no_debug_no_summary(self):
+        """Without --debug, no 'Load summary' line appears."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+
+        report = Report()
+        cfg = make_cfg(
+            import_path=inbox,
+            photos_path=self.photos,
+            do_load=True,
+        )
+        MediaScanner(config=cfg, report=report).run_load()
+        self.assertNotIn("Load summary", report.render())
+
+    def test_debug_reports_unrecognised_extensions(self):
+        """In debug mode, a summary of ignored unknown extensions appears in the report."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        (inbox / "document.docx").write_bytes(b"x")
+        (inbox / "spreadsheet.xlsx").write_bytes(b"x")
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+        report = Report()
+        cfg = make_cfg(import_path=inbox, photos_path=self.photos,
+                       do_load=True, debug=True)
+        MediaScanner(config=cfg, report=report).run_load()
+        text = report.render()
+        self.assertIn("Ignored files with unrecognised extensions", text)
+        self.assertIn(".docx (1)", text)
+        self.assertIn(".xlsx (1)", text)
+        # Recognised extension must not appear in the ignored-extensions line
+        ignored_line = next(l for l in text.splitlines() if "unrecognised" in l)
+        self.assertNotIn(".jpg", ignored_line)
+
+    def test_no_unrecognised_extensions_no_summary(self):
+        """When all files are recognised, no ignored-extensions line appears."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+        report = Report()
+        cfg = make_cfg(import_path=inbox, photos_path=self.photos,
+                       do_load=True, debug=True)
+        MediaScanner(config=cfg, report=report).run_load()
+        self.assertNotIn("Ignored files with unrecognised extensions", report.render())
+
+    def test_unrecognised_extensions_not_reported_without_debug(self):
+        """Without --debug, no ignored-extensions line should appear."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        (inbox / "document.docx").write_bytes(b"x")
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+        report = Report()
+        cfg = make_cfg(import_path=inbox, photos_path=self.photos, do_load=True)
+        MediaScanner(config=cfg, report=report).run_load()
+        self.assertNotIn("Ignored files with unrecognised extensions", report.render())
+
+
+# ── _scan cache hit ───────────────────────────────────────────────────────
+
+class TestScanCache(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_second_scan_returns_cached_entry(self):
+        """_scan must return the identical dict on a second call with the same roots."""
+        d = self.photos / "2023" / "08" / "14"
+        d.mkdir(parents=True)
+        (d / "IMG_2023-08-14.jpg").write_bytes(b"x")
+        cfg = make_cfg(photos_path=self.photos)
+        scanner = MediaScanner(config=cfg)
+        roots = [self.photos]
+        first = scanner._scan(roots)
+        second = scanner._scan(roots)
+        self.assertIs(first, second)
+
+    def test_run_dupes_and_run_validate_share_cache(self):
+        """run_dupes followed by run_validate on the same roots must walk once."""
+        d = self.photos / "2023" / "08" / "14"
+        d.mkdir(parents=True)
+        (d / "IMG_2023-08-14.jpg").write_bytes(b"x")
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True, do_validate=True)
+        scanner = MediaScanner(config=cfg)
+        scanner.run_dupes()
+        scanner.run_validate()
+        self.assertEqual(len(scanner._scan_cache), 1)
+
+    def test_validate_after_dupes_only_triggers_lazy_classify(self):
+        """A dupes-only scan skips EXIF; a subsequent validate call must classify
+        from the cached all_files list without re-walking."""
+        wrong = self.photos / "2020" / "01" / "01"
+        wrong.mkdir(parents=True)
+        (wrong / "IMG_2023-08-14.jpg").write_bytes(b"x" * 50)
+
+        # First pass: dupes-only — misplaced_classified must remain False
+        dupes_cfg = make_cfg(photos_path=self.photos, do_dupes=True)
+        scanner = MediaScanner(config=dupes_cfg)
+        scanner.run_dupes()
+        key = frozenset([self.photos])
+        self.assertFalse(scanner._scan_cache[key]['misplaced_classified'])
+        self.assertEqual(scanner._scan_cache[key]['by_misplaced'], {})
+
+        # Second pass: validate on same scanner — must classify lazily
+        scanner._cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        report = Report()
+        scanner._report = report
+        scanner.run_validate()
+        self.assertTrue(scanner._scan_cache[key]['misplaced_classified'])
+        self.assertIn("Misplaced", report.render())
+
+
+# ── _evict_from_scan edge cases ────────────────────────────────────────────
+
+class TestEvictFromScanEdgeCases(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+
+    def test_evict_mf_not_in_all_files_does_not_raise(self):
+        """ValueError from all_files.remove must be silently swallowed."""
+        mf = make_image_file(self.tmp, "a.jpg", content=b"x" * 100)
+        key = frozenset([self.tmp])
+        scanner = MediaScanner(config=make_cfg())
+        scanner._scan_cache[key] = {
+            'all_files': [],          # mf not present → remove raises ValueError
+            'by_size': {mf.size: [mf]},
+            'by_misplaced': {},
+        }
+        scanner._evict_from_scan(key, mf)  # Must not raise
+        self.assertNotIn(mf, scanner._scan_cache[key]['by_size'].get(mf.size, []))
+
+    def test_evict_mf_not_in_size_group_does_not_raise(self):
+        """ValueError from size_group.remove must be silently swallowed."""
+        mf = make_image_file(self.tmp, "a.jpg", content=b"x" * 100)
+        sentinel = MagicMock()  # ensures size_group is truthy; mf is not in it
+        key = frozenset([self.tmp])
+        scanner = MediaScanner(config=make_cfg())
+        scanner._scan_cache[key] = {
+            'all_files': [mf],
+            'by_size': {mf.size: [sentinel]},  # truthy but mf absent → remove raises ValueError
+            'by_misplaced': {},
+        }
+        scanner._evict_from_scan(key, mf)  # Must not raise
+
+    def test_evict_removes_mf_from_misplaced_group(self):
+        """_evict_from_scan must remove mf from by_misplaced when present."""
+        mf = make_image_file(self.tmp, "a.jpg", content=b"x" * 100)
+        key = frozenset([self.tmp])
+        scanner = MediaScanner(config=make_cfg())
+        scanner._scan_cache[key] = {
+            'all_files': [mf],
+            'by_size': {mf.size: [mf]},
+            'by_misplaced': {mf.dated: [mf]},
+        }
+        scanner._evict_from_scan(key, mf)
+        self.assertNotIn(mf, scanner._scan_cache[key]['by_misplaced'].get(mf.dated, []))
+
+    def test_evict_mf_not_in_misplaced_group_does_not_raise(self):
+        """ValueError from misplaced_group.remove must be silently swallowed."""
+        mf = make_image_file(self.tmp, "a.jpg", content=b"x" * 100)
+        sentinel = MagicMock()  # ensures misplaced_group is truthy; mf is not in it
+        key = frozenset([self.tmp])
+        scanner = MediaScanner(config=make_cfg())
+        scanner._scan_cache[key] = {
+            'all_files': [mf],
+            'by_size': {mf.size: [mf]},
+            'by_misplaced': {mf.dated: [sentinel]},  # truthy but mf absent → ValueError
+        }
+        scanner._evict_from_scan(key, mf)  # Must not raise
+
+
+# ── _count_expected_outcomes ───────────────────────────────────────────────
+
+class TestCountExpectedOutcomes(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def _make_dated_image(self, directory: Path, filename: str, cfg, content=b"x" * 50):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / filename).write_bytes(content)
+        reader = MagicMock()
+        reader.get_date.return_value = None
+        from deduper.media import ImageFile
+        return ImageFile(directory, filename, cfg, exif_reader=reader)
+
+    def test_skip_when_no_normalised_directory(self):
+        """File with no default_root → _normalised_directory is None → skip."""
+        cfg = make_cfg()  # no photos_path → default_root is None
+        mf = self._make_dated_image(self.tmp, "IMG_2023-08-14.jpg", cfg)
+        scanner = MediaScanner(config=cfg)
+        counts = scanner._count_expected_outcomes([mf])
+        self.assertEqual(counts['skip'], 1)
+        self.assertEqual(counts['relocate'] + counts['remove_dup'] + counts['overflow'], 0)
+
+    def test_overflow_when_collision_and_misdated_path_set(self):
+        """Target exists with different content + misdated_path → overflow."""
+        overflow = self.tmp / "overflow"
+        overflow.mkdir()
+        correct = self.photos / "2023" / "08" / "14"
+        correct.mkdir(parents=True)
+        cfg = make_cfg(photos_path=self.photos, misdated_path=overflow)
+        mf = self._make_dated_image(self.tmp, "IMG_2023-08-14.jpg", cfg, content=b"version A" * 30)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(b"version B" * 30)
+        scanner = MediaScanner(config=cfg)
+        counts = scanner._count_expected_outcomes([mf])
+        self.assertEqual(counts['overflow'], 1)
+
+    def test_skip_when_collision_and_no_misdated_path(self):
+        """Target exists with different content + no misdated_path → skip."""
+        correct = self.photos / "2023" / "08" / "14"
+        correct.mkdir(parents=True)
+        cfg = make_cfg(photos_path=self.photos)  # no misdated_path
+        mf = self._make_dated_image(self.tmp, "IMG_2023-08-14.jpg", cfg, content=b"version A" * 30)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(b"version B" * 30)
+        scanner = MediaScanner(config=cfg)
+        counts = scanner._count_expected_outcomes([mf])
+        self.assertEqual(counts['skip'], 1)
+
+
+# ── Debug expected-outcome display: overflow and skip ─────────────────────
+
+class TestDebugExpectedOutcomesDisplay(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def _place_collision(self, content_a=b"version A" * 30, content_b=b"version B" * 30):
+        wrong   = self.photos / "2020" / "01" / "01"
+        correct = self.photos / "2023" / "08" / "14"
+        wrong.mkdir(parents=True)
+        correct.mkdir(parents=True)
+        (wrong   / "IMG_2023-08-14.jpg").write_bytes(content_a)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(content_b)
+
+    def test_debug_shows_overflow_count(self):
+        """When misdated_path is set and a collision exists, overflow count appears."""
+        overflow = self.tmp / "overflow"
+        overflow.mkdir()
+        self._place_collision()
+        report = Report()
+        cfg = make_cfg(
+            photos_path=self.photos, do_validate=True,
+            debug=True, misdated_path=overflow,
+        )
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("would send to overflow dir", report.render())
+
+    def test_debug_shows_skip_count(self):
+        """When no misdated_path and a collision exists, skip count appears."""
+        self._place_collision()
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("would skip", report.render())
+
+
+# ── Fix loop: collision counted as error ───────────────────────────────────
+
+class TestRunValidateFixLoopErrorCounting(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_collision_without_overflow_counted_as_error_in_summary(self):
+        """A Collision message (no overflow path) must increment the error count."""
+        wrong   = self.photos / "2020" / "01" / "01"
+        correct = self.photos / "2023" / "08" / "14"
+        wrong.mkdir(parents=True)
+        correct.mkdir(parents=True)
+        (wrong   / "IMG_2023-08-14.jpg").write_bytes(b"version A" * 30)
+        (correct / "IMG_2023-08-14.jpg").write_bytes(b"version B" * 30)
+
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        self.assertIn("Fix summary", text)
+        self.assertIn("1 error(s)", text)
+
+
+# ── run_load parallel mode ─────────────────────────────────────────────────
+
+class TestRunLoadParallel(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.inbox  = self.tmp / "inbox"
+        self.photos = self.tmp / "photos"
+        self.inbox.mkdir()
+        self.photos.mkdir()
+
+    def test_parallel_run_load_calls_prefetch(self):
+        """With parallel=True, run_load must invoke the image and video prefetch."""
+        (self.inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
+        cfg = make_cfg(
+            import_path=self.inbox, photos_path=self.photos,
+            do_load=True, parallel=True,
+        )
+        scanner = MediaScanner(config=cfg)
+        with patch.object(scanner, '_prefetch_image_dates') as mock_img, \
+             patch.object(scanner, '_prefetch_video_dates') as mock_vid:
+            scanner.run_load()
+        mock_img.assert_called_once()
+        mock_vid.assert_called_once()
 
 
 if __name__ == "__main__":

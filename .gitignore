@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+
+# Virtual environments
+env/
+venv/
+.venv/
+
+# Local config (contains absolute NAS paths — use photos.ini.example as template)
+*.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp

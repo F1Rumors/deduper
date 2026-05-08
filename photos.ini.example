@@ -1,0 +1,32 @@
+# photos.ini.example — copy to photos.ini and fill in your paths
+#
+# Command-line arguments always override these values.
+# Run with: python3.11 deduper/deduper.py --config ./photos.ini [--validate|--dupes|--load]
+
+[LOCATIONS]
+photos   = /volume1/shared/photos/by date
+videos   = /volume1/shared/videos
+; misdated = /volume1/shared/photos/misdated   ; overflow dir for date collisions
+; import   = /volume1/shared/inbox             ; source tree for --load
+
+; Directory names pruned from all tree walks (comma-separated)
+; exclude_dirs = @SynoEAStream, @eaDir, Misc
+
+; Regex matched against filenames to skip
+; exclude_re = (?:\.ini$|Thumbs\.db$|\.Picasa3Temp|\b@SynoEAStream\b|\b@eaDir\b)
+
+[GLOBALS]
+DEFAULT_SEP    = /        ; Use yyyy/mm/dd directories. Set to - for yyyy-mm-dd.
+DRYRUN         = false
+DEBUG          = false
+POOL_SIZE      = 4        ; Worker processes for parallel image EXIF prefetch
+POOL_CHUNKSIZE = 100
+
+; Full path to the exiftool binary — omit to search PATH
+; exiftool_path = /opt/bin/exiftool
+
+[ACTIONS]
+; Pre-select actions so you don't need flags every run
+import   = false
+dupes    = false
+validate = false

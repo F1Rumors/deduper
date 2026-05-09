@@ -302,6 +302,24 @@ class MediaFile:
             for sep in ("/", "-")
         )
 
+    def _in_correct_subtree(self, root: Path) -> bool:
+        """True if the file is in a valid dated directory or any subdirectory of one.
+
+        Unlike ``_in_correct_location`` (exact directory match used for duplicate
+        sorting), this method accepts named subdirectories such as
+        ``2008/03/24/Originals/`` as valid locations so that ``validate()`` does
+        not flag intentional subdirectory organisation as misplaced.
+        """
+        if not self.dated:
+            return False
+        for valid_dir in self._valid_directories(root):
+            try:
+                self._dir.relative_to(valid_dir)
+                return True
+            except ValueError:
+                pass
+        return False
+
     def validate(self, target_root: Optional[Path] = None) -> Optional[str]:
         """Return a problem description if the file is misplaced, else None."""
         if self._deleted:
@@ -311,7 +329,7 @@ class MediaFile:
         root = target_root or self.default_root
         if root is None:
             return f"{self}: no target root configured"
-        if self._dir in self._valid_directories(root):
+        if self._in_correct_subtree(root):
             return None
         expected = self._normalised_directory
         return f"{self}: expected in {expected}, found in {self._dir}"

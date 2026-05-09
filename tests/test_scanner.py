@@ -1412,6 +1412,52 @@ class TestRunLoadParallel(unittest.TestCase):
         mock_vid.assert_called_once()
 
 
+# ── run_validate: subdirectory handling ──────────────────────────────────
+
+class TestRunValidateSubdirectories(unittest.TestCase):
+    """Files in named subdirectories of the correct dated directory must not be
+    reported as misplaced or touched by --fix."""
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_file_in_named_subdir_not_reported_as_misplaced(self):
+        subdir = self.photos / "2008" / "03" / "24" / "Originals"
+        subdir.mkdir(parents=True)
+        (subdir / "IMG_0843.JPG").write_bytes(b"x" * 50)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        # Should report "No misplaced" or a count of 0, not mention IMG_0843
+        self.assertNotIn("IMG_0843", text)
+        self.assertIn("No misplaced", text)
+
+    def test_file_in_wrong_date_subdir_is_still_misplaced(self):
+        """Named subdir under a wrong date dir must still be reported."""
+        wrong_subdir = self.photos / "2020" / "01" / "01" / "Originals"
+        wrong_subdir.mkdir(parents=True)
+        (wrong_subdir / "IMG_2008-03-24.jpg").write_bytes(b"x" * 50)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("Misplaced", report.render())
+
+    def test_file_in_subdir_not_moved_by_fix(self):
+        subdir = self.photos / "2008" / "03" / "24" / "Originals"
+        subdir.mkdir(parents=True)
+        (subdir / "IMG_0843.JPG").write_bytes(b"x" * 50)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_validate()
+        # File must still be in its original subdirectory
+        self.assertTrue((subdir / "IMG_0843.JPG").exists())
+
+
 # ── run_prune ─────────────────────────────────────────────────────────────
 
 class TestRunPrune(unittest.TestCase):

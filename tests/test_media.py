@@ -363,6 +363,44 @@ class TestMediaFileValidate(unittest.TestCase):
         mf = ImageFile(wrong_dir, "photo.jpg", cfg, exif_reader=reader)
         self.assertIsNotNone(mf.validate())
 
+    def test_returns_none_for_named_subdirectory(self):
+        """File in yyyy/mm/dd/Originals/ must not be flagged as misplaced."""
+        photos = self.tmp / "photos"
+        d = date(2008, 3, 24)
+        subdir = photos / "2008" / "03" / "24" / "Originals"
+        subdir.mkdir(parents=True)
+        (subdir / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = d
+        cfg = make_cfg(photos_path=photos)
+        mf = ImageFile(subdir, "photo.jpg", cfg, exif_reader=reader)
+        self.assertIsNone(mf.validate())
+
+    def test_returns_none_for_deep_subdirectory(self):
+        """Multi-level subdirectory under the correct dated dir is also valid."""
+        photos = self.tmp / "photos"
+        d = date(2008, 3, 24)
+        subdir = photos / "2008" / "03" / "24" / "Originals" / "Raw"
+        subdir.mkdir(parents=True)
+        (subdir / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = d
+        cfg = make_cfg(photos_path=photos)
+        mf = ImageFile(subdir, "photo.jpg", cfg, exif_reader=reader)
+        self.assertIsNone(mf.validate())
+
+    def test_returns_message_for_subdir_of_wrong_date(self):
+        """Named subdir under a wrong dated directory is still flagged."""
+        photos = self.tmp / "photos"
+        wrong_subdir = photos / "2020" / "01" / "01" / "Originals"
+        wrong_subdir.mkdir(parents=True)
+        (wrong_subdir / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2008, 3, 24)
+        cfg = make_cfg(photos_path=photos)
+        mf = ImageFile(wrong_subdir, "photo.jpg", cfg, exif_reader=reader)
+        self.assertIsNotNone(mf.validate())
+
     def test_returns_message_when_no_date(self):
         mf = make_image(self.tmp, "undated.jpg")
         result = mf.validate()
@@ -1033,6 +1071,61 @@ class TestRegistryMoveXdev(unittest.TestCase):
         # New path cached; old path evicted.
         self.assertIn((dst_dir / "photo.jpg").resolve(), registry._cache)
         self.assertNotIn((src_dir / "photo.jpg").resolve(), registry._cache)
+
+
+# ── _in_correct_subtree ───────────────────────────────────────────────────
+
+class TestInCorrectSubtree(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+
+    def _make_in(self, rel_dir: str, filename: str, d: date) -> ImageFile:
+        dirpath = self.photos / Path(rel_dir)
+        dirpath.mkdir(parents=True, exist_ok=True)
+        (dirpath / filename).write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = d
+        return ImageFile(dirpath, filename, make_cfg(photos_path=self.photos), exif_reader=reader)
+
+    def test_true_for_exact_slash_dir(self):
+        mf = self._make_in("2008/03/24", "photo.jpg", date(2008, 3, 24))
+        self.assertTrue(mf._in_correct_subtree(self.photos))
+
+    def test_true_for_exact_dash_dir(self):
+        mf = self._make_in("2008-03-24", "photo.jpg", date(2008, 3, 24))
+        self.assertTrue(mf._in_correct_subtree(self.photos))
+
+    def test_true_for_named_subdirectory(self):
+        """A file in yyyy/mm/dd/Originals/ is within the correct subtree."""
+        mf = self._make_in("2008/03/24/Originals", "photo.jpg", date(2008, 3, 24))
+        self.assertTrue(mf._in_correct_subtree(self.photos))
+
+    def test_true_for_deep_named_subdirectory(self):
+        """Multi-level subdirectories are accepted."""
+        mf = self._make_in("2008/03/24/Originals/Raw", "photo.jpg", date(2008, 3, 24))
+        self.assertTrue(mf._in_correct_subtree(self.photos))
+
+    def test_true_for_subdir_of_dash_dir(self):
+        mf = self._make_in("2008-03-24/Originals", "photo.jpg", date(2008, 3, 24))
+        self.assertTrue(mf._in_correct_subtree(self.photos))
+
+    def test_false_for_wrong_dated_dir(self):
+        """Wrong date directory is not a valid subtree even with a matching subdir name."""
+        mf = self._make_in("2020/01/01/Originals", "photo.jpg", date(2008, 3, 24))
+        self.assertFalse(mf._in_correct_subtree(self.photos))
+
+    def test_false_for_parent_of_valid_dir(self):
+        """A parent of the valid dir (e.g. yyyy/mm/) is not a valid subtree."""
+        mf = self._make_in("2008/03", "photo.jpg", date(2008, 3, 24))
+        self.assertFalse(mf._in_correct_subtree(self.photos))
+
+    def test_false_when_no_date(self):
+        mf = make_image(self.tmp, "photo.jpg")
+        self.assertFalse(mf._in_correct_subtree(self.photos))
 
 
 # ── _in_correct_location ──────────────────────────────────────────────────

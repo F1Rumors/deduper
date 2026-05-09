@@ -107,7 +107,6 @@ class TestTee(unittest.TestCase):
         photos = self.tmp / "photos"
         photos.mkdir()
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"data")
-        import os
         orig_dir = os.getcwd()
         os.chdir(self.tmp)
         try:
@@ -122,13 +121,12 @@ class TestTee(unittest.TestCase):
         self.assertEqual(log_files, [], "No log file should be created with --stdout")
 
     def test_no_stdout_flag_creates_log_file(self):
-        """Without --stdout, a timestamped log file is created in cwd."""
+        """Without --stdout, a timestamped log file is created in cwd and cleaned up."""
         inbox = self.tmp / "inbox"
         inbox.mkdir()
         photos = self.tmp / "photos"
         photos.mkdir()
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"data")
-        import os
         orig_dir = os.getcwd()
         os.chdir(self.tmp)
         try:
@@ -141,6 +139,7 @@ class TestTee(unittest.TestCase):
             os.chdir(orig_dir)
         log_files = list(self.tmp.glob("dedupe.*.log"))
         self.assertEqual(len(log_files), 1)
+        # Log file lives inside self.tmp — cleaned up automatically by ExitStack
 
 
 class TestMainNoAction(unittest.TestCase):
@@ -148,7 +147,7 @@ class TestMainNoAction(unittest.TestCase):
 
     def test_no_action_exits(self):
         with self.assertRaises(SystemExit) as cm:
-            main(["--photos", "/p"])
+            main(["--photos", "/p", "--stdout"])
         self.assertNotEqual(cm.exception.code, 0)
 
 
@@ -163,7 +162,7 @@ class TestMainExifPath(unittest.TestCase):
         f = self.tmp / "test.jpg"
         f.write_bytes(b"not a real image")
         with patch("deduper.cli.cmd_exif") as mock_exif:
-            result = main(["--exif", str(f)])
+            result = main(["--exif", str(f), "--stdout"])
         self.assertEqual(result, 0)
         mock_exif.assert_called_once()
         (paths, _cfg), _ = mock_exif.call_args
@@ -186,7 +185,7 @@ class TestMainLoad(unittest.TestCase):
         result = main([
             "--loadpath", str(self.inbox),
             "--photos", str(self.photos),
-            "--dryrun",
+            "--dryrun", "--stdout",
         ])
         self.assertEqual(result, 0)
 
@@ -195,7 +194,7 @@ class TestMainLoad(unittest.TestCase):
         result = main([
             "--loadpath", str(self.inbox),
             "--photos", str(self.photos),
-            "--fix",
+            "--fix", "--stdout",
         ])
         self.assertEqual(result, 0)
         expected = self.photos / "2023" / "08" / "14" / "IMG_2023-08-14.jpg"
@@ -217,14 +216,14 @@ class TestMainDupes(unittest.TestCase):
 
     def test_dupes_reported_without_fix(self):
         result = main([
-            "--dupes",
+            "--dupes", "--stdout",
             "--photos", str(self.photos),
         ])
         self.assertEqual(result, 0)
 
     def test_dupes_removed_with_fix(self):
         result = main([
-            "--dupes", "--fix",
+            "--dupes", "--fix", "--stdout",
             "--photos", str(self.photos),
         ])
         self.assertEqual(result, 0)
@@ -247,7 +246,7 @@ class TestMainValidate(unittest.TestCase):
         # File that matches its path date (via filename)
         (d / "IMG_2023-08-14.jpg").write_bytes(b"data")
         result = main([
-            "--validate",
+            "--validate", "--stdout",
             "--photos", str(self.photos),
         ])
         self.assertEqual(result, 0)
@@ -425,7 +424,7 @@ class TestMainDiagnosticMultipleFlags(unittest.TestCase):
         with patch("deduper.cli.cmd_exif"), \
              patch("deduper.cli.cmd_compare_exif"), \
              patch("builtins.print") as mock_print:
-            result = main(["--exif", "--compareExif", str(self.f)])
+            result = main(["--exif", "--compareExif", str(self.f), "--stdout"])
         self.assertEqual(result, 0)
         # A blank print() separates the two command outputs
         self.assertIn((), [call.args for call in mock_print.call_args_list])
@@ -435,14 +434,14 @@ class TestMainDiagnosticMultipleFlags(unittest.TestCase):
         with patch("deduper.cli.cmd_exif"), \
              patch("deduper.cli.cmd_get_date"), \
              patch("builtins.print") as mock_print:
-            result = main(["--exif", "--getDate", str(self.f)])
+            result = main(["--exif", "--getDate", str(self.f), "--stdout"])
         self.assertEqual(result, 0)
         self.assertIn((), [call.args for call in mock_print.call_args_list])
 
     def test_default_diagnostic_invokes_cmd_exif(self):
         """Paths with no diagnostic flag should default to cmd_exif."""
         with patch("deduper.cli.cmd_exif") as mock_exif:
-            result = main([str(self.f)])
+            result = main([str(self.f), "--stdout"])
         self.assertEqual(result, 0)
         mock_exif.assert_called_once()
         (paths, _cfg), _ = mock_exif.call_args
@@ -457,7 +456,7 @@ class TestMainDiagnosticMultipleFlags(unittest.TestCase):
         with patch("deduper.scanner.MediaScanner.run_load", side_effect=KeyboardInterrupt), \
              patch("builtins.print"):
             result = main([
-                "--load",
+                "--load", "--stdout",
                 "--loadpath", str(inbox),
                 "--photos", str(photos),
             ])
@@ -472,7 +471,7 @@ class TestMainDiagnosticMultipleFlags(unittest.TestCase):
         with patch("deduper.scanner.MediaScanner.run_load", side_effect=RuntimeError("boom")), \
              patch("builtins.print"):
             result = main([
-                "--load",
+                "--load", "--stdout",
                 "--loadpath", str(inbox),
                 "--photos", str(photos),
             ])

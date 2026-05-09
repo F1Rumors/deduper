@@ -54,7 +54,7 @@ class TestConfigFromArgs(unittest.TestCase):
     def _make_args(self, **kwargs):
         defaults = dict(
             photos=None, videos=None, misdated=None, loadpath=None,
-            load=False, dupes=False, validate=False, fix=False, force=False,
+            load=False, dupes=False, validate=False, prune=False, fix=False, force=False,
             parallel=False, debug=False, dryrun=False,
             compareExif=False, exif=False, getDate=False, paths=[],
             config=None, report=None,
@@ -155,6 +155,16 @@ class TestConfigFromArgs(unittest.TestCase):
         with self.assertRaises(ValueError, msg="--exclude-re"):
             Config.from_args(args)
 
+    def test_prune_flag_sets_do_prune(self):
+        args = self._make_args(prune=True)
+        cfg = Config.from_args(args)
+        self.assertTrue(cfg.do_prune)
+
+    def test_prune_default_false(self):
+        args = self._make_args()
+        cfg = Config.from_args(args)
+        self.assertFalse(cfg.do_prune)
+
 
 class TestConfigFromFile(unittest.TestCase):
 
@@ -206,12 +216,14 @@ POOL_CHUNKSIZE = 20
 import = true
 dupes = true
 validate = false
+prune = true
 """)
         cfg = Config()
         cfg._apply_config_file(ini)
         self.assertTrue(cfg.do_load)
         self.assertTrue(cfg.do_dupes)
         self.assertFalse(cfg.do_validate)
+        self.assertTrue(cfg.do_prune)
 
     def test_missing_file_does_not_raise(self):
         cfg = Config()
@@ -331,6 +343,10 @@ class TestConfigValidateForAction(unittest.TestCase):
             photos_path=Path("/photos"),
             import_path=Path("/inbox"),
         )
+        cfg.validate_for_action()  # Must not raise
+
+    def test_prune_action_ok(self):
+        cfg = Config(do_prune=True)
         cfg.validate_for_action()  # Must not raise
 
 

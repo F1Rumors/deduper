@@ -34,6 +34,7 @@ class Config:
     do_load: bool = False       # Import media from import_path
     do_dupes: bool = False      # Detect / remove duplicates
     do_validate: bool = False   # Detect / fix misplaced files
+    do_prune: bool = False      # Remove empty directories from library trees
     do_force: bool = False      # Rename on collision rather than skip
     do_compare_exif: bool = False  # Report EXIF differences between backends
 
@@ -118,6 +119,7 @@ class Config:
         )
         cfg.do_dupes = bool(args.dupes or cfg.do_dupes)
         cfg.do_validate = bool(args.validate or cfg.do_validate)
+        cfg.do_prune = bool(args.prune or cfg.do_prune)
         cfg.do_force = args.force
         cfg.do_compare_exif = args.compareExif
         cfg.do_exif = args.exif
@@ -196,6 +198,8 @@ class Config:
                 self.do_dupes = a.getboolean("dupes")
             if "validate" in a:
                 self.do_validate = a.getboolean("validate")
+            if "prune" in a:
+                self.do_prune = a.getboolean("prune")
 
     # ------------------------------------------------------------------
     # Convenience accessors used throughout the codebase
@@ -214,7 +218,7 @@ class Config:
 
     def validate_for_action(self) -> None:
         """Raise ``ValueError`` if the configuration cannot run any action."""
-        if not (self.do_load or self.do_dupes or self.do_validate or self.diagnostic_paths):
+        if not (self.do_load or self.do_dupes or self.do_validate or self.do_prune or self.diagnostic_paths):
             raise ValueError(
                 "No action specified. Use --load, --dupes, --validate, or supply file paths."
             )

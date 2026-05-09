@@ -1412,5 +1412,98 @@ class TestRunLoadParallel(unittest.TestCase):
         mock_vid.assert_called_once()
 
 
+# ── run_prune ─────────────────────────────────────────────────────────────
+
+class TestRunPrune(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_removes_empty_subdirectory(self):
+        empty = self.photos / "2021" / "09" / "29"
+        empty.mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertFalse(empty.exists())
+
+    def test_removes_empty_subdirs_bottom_up(self):
+        """Removing a leaf that empties its parent removes the parent too."""
+        leaf = self.photos / "2021" / "09" / "29"
+        leaf.mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertFalse((self.photos / "2021").exists())
+
+    def test_skips_non_empty_directory(self):
+        dated = self.photos / "2021" / "09" / "29"
+        dated.mkdir(parents=True)
+        (dated / "photo.jpg").write_bytes(b"data")
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertTrue(dated.exists())
+        self.assertTrue((dated / "photo.jpg").exists())
+
+    def test_never_removes_root_itself(self):
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertTrue(self.photos.exists())
+
+    def test_dryrun_does_not_remove(self):
+        empty = self.photos / "2021" / "09" / "29"
+        empty.mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertTrue(empty.exists())
+        self.assertIn("Would prune", report.render())
+
+    def test_dryrun_reports_count(self):
+        (self.photos / "2021" / "09" / "29").mkdir(parents=True)
+        (self.photos / "2022" / "03" / "01").mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_prune()
+        text = report.render()
+        self.assertIn("would be removed", text)
+
+    def test_fix_reports_pruned_count(self):
+        (self.photos / "2021" / "09" / "29").mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertIn("removed", report.render())
+
+    def test_no_library_paths_reports_skip(self):
+        report = Report()
+        cfg = make_cfg(do_prune=True)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertIn("skipped", report.render().lower())
+
+    def test_prunes_both_photos_and_videos_roots(self):
+        videos = self.tmp / "videos"
+        videos.mkdir()
+        (self.photos / "2021" / "09" / "29").mkdir(parents=True)
+        (videos / "2022" / "03" / "01").mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, videos_path=videos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertFalse((self.photos / "2021").exists())
+        self.assertFalse((videos / "2022").exists())
+
+    def test_missing_root_is_skipped_gracefully(self):
+        nonexistent = self.tmp / "nonexistent"
+        report = Report()
+        cfg = make_cfg(photos_path=nonexistent, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()  # Must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

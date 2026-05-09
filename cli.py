@@ -76,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     act.add_argument("--load", action="store_true", help="Import media from --loadpath")
     act.add_argument("--dupes", action="store_true", help="Detect duplicate media")
     act.add_argument("--validate", action="store_true", help="Detect misplaced media")
+    act.add_argument("--prune", action="store_true", help="Remove empty directories from library trees")
     act.add_argument(
         "--exif", action="store_true",
         help="Dump raw EXIF metadata for the given paths",
@@ -283,6 +284,8 @@ def _run(args, config, parser) -> int:
             scanner.run_dupes()
         if config.do_validate:
             scanner.run_validate()
+        if config.do_prune:
+            scanner.run_prune()
     except KeyboardInterrupt:
         report("Interrupted by user")
         return 1

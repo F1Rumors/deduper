@@ -32,7 +32,7 @@ class TestBuildParser(unittest.TestCase):
 
     def test_all_flags(self):
         args = self._parse(
-            "--load", "--dupes", "--validate", "--fix", "--force",
+            "--load", "--dupes", "--validate", "--prune", "--fix", "--force",
             "--parallel", "--debug", "--dryrun", "--compareExif",
             "--photos", "/p", "--videos", "/v", "--misdated", "/m",
             "--loadpath", "/i", "--report", "a@b.com",
@@ -40,6 +40,7 @@ class TestBuildParser(unittest.TestCase):
         self.assertTrue(args.load)
         self.assertTrue(args.dupes)
         self.assertTrue(args.validate)
+        self.assertTrue(args.prune)
         self.assertTrue(args.fix)
         self.assertTrue(args.force)
         self.assertTrue(args.parallel)
@@ -51,6 +52,14 @@ class TestBuildParser(unittest.TestCase):
         self.assertEqual(args.misdated, "/m")
         self.assertEqual(args.loadpath, "/i")
         self.assertEqual(args.report, "a@b.com")
+
+    def test_prune_flag(self):
+        args = self._parse("--prune", "--stdout")
+        self.assertTrue(args.prune)
+
+    def test_prune_false_by_default(self):
+        args = self._parse("--load")
+        self.assertFalse(args.prune)
 
     def test_exif_flag(self):
         args = self._parse("--exif", "/a.jpg", "/b.jpg")

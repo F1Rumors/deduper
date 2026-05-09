@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import sys
 import time
 from collections import defaultdict
@@ -309,6 +310,45 @@ class MediaScanner:
             f"{n_removed_dup:,d} removed as duplicate, "
             f"{n_errors:,d} error(s)"
         )
+
+    def run_prune(self) -> None:
+        """Remove empty directories from the photos and videos trees (bottom-up).
+
+        Skips the root directories themselves.  Respects ``config.dryrun``.
+        """
+        roots = [r.resolve() for r in (self._cfg.photos_path, self._cfg.videos_path) if r]
+        if not roots:
+            self._report("Prune skipped: no library paths configured")
+            return
+
+        n_pruned = n_would_prune = 0
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+                d = Path(dirpath).resolve()
+                if d == root:
+                    continue
+                try:
+                    if any(d.iterdir()):
+                        continue
+                except OSError:
+                    continue
+                if self._cfg.dryrun:
+                    self._report(f"  Would prune: {d}")
+                    n_would_prune += 1
+                else:
+                    try:
+                        d.rmdir()
+                        self._report(f"  Pruned: {d}")
+                        n_pruned += 1
+                    except OSError as exc:
+                        self._report(f"  Could not prune {d}: {exc}")
+
+        count = n_would_prune if self._cfg.dryrun else n_pruned
+        noun = "directory" if count == 1 else "directories"
+        verb = "would be removed" if self._cfg.dryrun else "removed"
+        self._report(f"\nPrune: {count:,d} empty {noun} {verb}")
 
     # ── Walk ───────────────────────────────────────────────────────────────
 

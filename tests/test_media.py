@@ -1035,5 +1035,59 @@ class TestRegistryMoveXdev(unittest.TestCase):
         self.assertNotIn((src_dir / "photo.jpg").resolve(), registry._cache)
 
 
+# ── _in_correct_location ──────────────────────────────────────────────────
+
+class TestInCorrectLocation(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+
+    def _make_in(self, rel_dir: str, filename: str, d: date) -> ImageFile:
+        dirpath = self.photos / Path(rel_dir)
+        dirpath.mkdir(parents=True, exist_ok=True)
+        (dirpath / filename).write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = d
+        return ImageFile(dirpath, filename, make_cfg(photos_path=self.photos), exif_reader=reader)
+
+    def test_true_when_in_correct_slash_dir(self):
+        mf = self._make_in("2021/09/29", "photo.jpg", date(2021, 9, 29))
+        self.assertTrue(mf._in_correct_location)
+
+    def test_true_when_in_correct_dash_dir(self):
+        mf = self._make_in("2021-09-29", "photo.jpg", date(2021, 9, 29))
+        self.assertTrue(mf._in_correct_location)
+
+    def test_false_when_in_nested_subdir(self):
+        """File in 2021/09/29/2021-09-29/ is NOT in a valid home for its date."""
+        mf = self._make_in("2021/09/29/2021-09-29", "photo.jpg", date(2021, 9, 29))
+        self.assertFalse(mf._in_correct_location)
+
+    def test_false_when_wrong_date_dir(self):
+        mf = self._make_in("2020/01/01", "photo.jpg", date(2021, 9, 29))
+        self.assertFalse(mf._in_correct_location)
+
+    def test_false_when_no_date(self):
+        mf = make_image(self.tmp, "photo.jpg")
+        self.assertFalse(mf._in_correct_location)
+
+    def test_false_when_no_root(self):
+        (self.tmp / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2021, 9, 29)
+        mf = ImageFile(self.tmp, "photo.jpg", make_cfg(), exif_reader=reader)
+        self.assertFalse(mf._in_correct_location)
+
+    def test_correctly_placed_sorts_before_nested(self):
+        """File in 2021/09/29/ must sort before file in 2021/09/29/2021-09-29/."""
+        d = date(2021, 9, 29)
+        correct = self._make_in("2021/09/29", "VID_20210929.mp4", d)
+        nested  = self._make_in("2021/09/29/2021-09-29", "VID_20210929.mp4", d)
+        self.assertLess(correct, nested)
+
+
 if __name__ == "__main__":
     unittest.main()

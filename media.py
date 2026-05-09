@@ -170,6 +170,13 @@ class MediaFile:
         path_date = parse_date(str(self._dir))
         return bool(path_date and self.dated and self.dated != path_date)
 
+    @property
+    def _in_correct_location(self) -> bool:
+        """True if the file's current directory is a valid home for its date."""
+        if not self.dated or not self.default_root:
+            return False
+        return self._dir in self._valid_directories(self.default_root)
+
     # ── Destination path ───────────────────────────────────────────────────
 
     @property
@@ -196,7 +203,7 @@ class MediaFile:
         return (
             not self._deleted,
             not self.original,
-            not self.misdated,
+            not self._in_correct_location,  # correctly-placed files sort first
             self._is_copy,    # Windows "- Copy" files sort after originals
             self.sequence,
             self._filename,

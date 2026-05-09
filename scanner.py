@@ -229,13 +229,12 @@ class MediaScanner:
                 f"target location — likely duplicates; run --fix to resolve)"
             )
 
-        sample_size = min(20, len(dateable))
         if dateable:
             self._report(
-                f"\nMisplaced dateable files — sample of {sample_size} "
+                f"\nMisplaced dateable files — {len(dateable):,d} total "
                 f"(current directory → should be in):"
             )
-            for mf in dateable[:sample_size]:
+            for mf in dateable:
                 expected = mf._normalised_directory
                 path_date = parse_date(str(mf.path.parent))
 
@@ -629,12 +628,12 @@ class MediaScanner:
         for key, group in dupes.items():
             keeper = group[0]
             redundant = group[1:]
-            self._report(f"  Keep: {keeper}")
+            self._report(f"  Keep: {keeper.path}")
             for mf in redundant:
                 if dryrun_or_report_only:
-                    self._report(f"    Would remove: {mf}")
+                    self._report(f"    Would remove: {mf.path}")
                 else:
-                    self._report(f"    Removing: {mf}")
+                    self._report(f"    Removing: {mf.path}")
                     mf.delete(self._registry)
                     self._evict_from_scan(cache_key, mf)
                     n_removed += 1

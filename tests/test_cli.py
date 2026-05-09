@@ -66,6 +66,82 @@ class TestBuildParser(unittest.TestCase):
         args = self._parse("--load", "--config", "myconfig.ini")
         self.assertEqual(args.config, "myconfig.ini")
 
+    def test_stdout_flag(self):
+        args = self._parse("--load", "--stdout")
+        self.assertTrue(args.stdout)
+
+    def test_stdout_false_by_default(self):
+        args = self._parse("--load")
+        self.assertFalse(args.stdout)
+
+
+class TestTee(unittest.TestCase):
+    """_Tee writes to both the original stdout and a file."""
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+
+    def test_tee_writes_to_file(self):
+        from deduper.cli import _Tee
+        log = self.tmp / "out.log"
+        tee = _Tee(log)
+        try:
+            print("hello tee")
+        finally:
+            tee.close()
+        self.assertIn("hello tee", log.read_text())
+
+    def test_tee_restores_stdout(self):
+        from deduper.cli import _Tee
+        original = sys.stdout
+        tee = _Tee(self.tmp / "out.log")
+        tee.close()
+        self.assertIs(sys.stdout, original)
+
+    def test_stdout_flag_suppresses_log_file(self):
+        """--stdout must not create a log file."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        photos = self.tmp / "photos"
+        photos.mkdir()
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"data")
+        import os
+        orig_dir = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            main([
+                "--loadpath", str(inbox),
+                "--photos", str(photos),
+                "--dryrun", "--stdout",
+            ])
+        finally:
+            os.chdir(orig_dir)
+        log_files = list(self.tmp.glob("dedupe.*.log"))
+        self.assertEqual(log_files, [], "No log file should be created with --stdout")
+
+    def test_no_stdout_flag_creates_log_file(self):
+        """Without --stdout, a timestamped log file is created in cwd."""
+        inbox = self.tmp / "inbox"
+        inbox.mkdir()
+        photos = self.tmp / "photos"
+        photos.mkdir()
+        (inbox / "IMG_2023-08-14.jpg").write_bytes(b"data")
+        import os
+        orig_dir = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            main([
+                "--loadpath", str(inbox),
+                "--photos", str(photos),
+                "--dryrun",
+            ])
+        finally:
+            os.chdir(orig_dir)
+        log_files = list(self.tmp.glob("dedupe.*.log"))
+        self.assertEqual(len(log_files), 1)
+
 
 class TestMainNoAction(unittest.TestCase):
     """main() exits with an error when no action is specified."""

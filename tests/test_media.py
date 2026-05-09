@@ -128,6 +128,38 @@ class TestMediaFileProperties(unittest.TestCase):
         mf = make_image(self.tmp, "img-123.png")
         self.assertEqual(mf.sequence, 123)
 
+    def test_is_copy_false_for_plain_file(self):
+        mf = make_image(self.tmp, "photo.jpg")
+        self.assertFalse(mf._is_copy)
+
+    def test_is_copy_false_for_sequenced_file(self):
+        mf = make_image(self.tmp, "photo_001.jpg")
+        self.assertFalse(mf._is_copy)
+
+    def test_is_copy_true_for_windows_copy(self):
+        mf = make_image(self.tmp, "photo - Copy.jpg")
+        self.assertTrue(mf._is_copy)
+
+    def test_is_copy_true_for_numbered_copy(self):
+        mf = make_image(self.tmp, "photo - Copy (2).jpg")
+        self.assertTrue(mf._is_copy)
+
+    def test_is_copy_true_for_sequenced_copy(self):
+        mf = make_image(self.tmp, "photo__01 - Copy.jpg")
+        self.assertTrue(mf._is_copy)
+
+    def test_copy_sorts_after_original(self):
+        """A '- Copy' file must sort after its original so the original is kept."""
+        a = make_image(self.tmp, "photo.jpg")
+        b = make_image(self.tmp, "photo - Copy.jpg", content=b"x" * 100)
+        self.assertLess(a, b)
+
+    def test_sequenced_copy_sorts_after_original(self):
+        """'__01 - Copy.jpg' (seq=0 but is_copy=True) must sort after '__01.jpg'."""
+        a = make_image(self.tmp, "IMG_20190814_084318__01.jpg")
+        b = make_image(self.tmp, "IMG_20190814_084318__01 - Copy.jpg", content=b"x" * 100)
+        self.assertLess(a, b)
+
 
 # ── Dated property ─────────────────────────────────────────────────────────
 

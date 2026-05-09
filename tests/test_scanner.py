@@ -231,6 +231,39 @@ class TestReportAndRemoveDupes(unittest.TestCase):
         self.assertTrue((self.tmp / "b.jpg").exists())
         self.assertIn("Would remove", report.render())
 
+    def test_dupe_report_shows_full_path(self):
+        """Keep/Would remove lines must contain the full file path, not just filename."""
+        data = b"q" * 200
+        mf1 = make_image_file(self.tmp, "a.jpg", content=data)
+        mf2 = make_image_file(self.tmp, "b.jpg", content=data)
+        dupes = {(mf1.size, mf1.hash): [mf1, mf2]}
+
+        report = Report()
+        scanner = MediaScanner(config=make_cfg(), report=report)
+        scanner._report_and_remove_dupes(dupes)
+        text = report.render()
+
+        # Full absolute path must appear (not just bare filename)
+        self.assertIn(str(mf1.path), text)
+        self.assertIn(str(mf2.path), text)
+
+    def test_copy_file_is_not_kept_over_original(self):
+        """A '- Copy' file must be the redundant one, not the keeper."""
+        data = b"r" * 200
+        original = make_image_file(self.tmp, "photo.jpg", content=data)
+        copy_f   = make_image_file(self.tmp, "photo - Copy.jpg", content=data)
+        # Sort order determines keeper: original must sort first
+        group = sorted([copy_f, original])
+        self.assertEqual(group[0].filename, "photo.jpg")
+
+    def test_sequenced_copy_not_kept_over_original(self):
+        """'__01 - Copy.jpg' must not be preferred over '__01.jpg'."""
+        data = b"s" * 200
+        original = make_image_file(self.tmp, "IMG_20190814__01.jpg", content=data)
+        copy_f   = make_image_file(self.tmp, "IMG_20190814__01 - Copy.jpg", content=data)
+        group = sorted([copy_f, original])
+        self.assertEqual(group[0].filename, "IMG_20190814__01.jpg")
+
 
 # ── MediaScanner.run_load ──────────────────────────────────────────────────
 
@@ -341,6 +374,23 @@ class TestRunValidateSeparator(unittest.TestCase):
         self.addCleanup(stack.close)
         self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         self.photos = self.tmp / "photos"
+
+    def test_misplaced_report_lists_all_files(self):
+        """Misplaced dateable report must include every file, not just a sample."""
+        # Create 25 misplaced files — previously only 20 were shown
+        wrong = self.photos / "2020" / "01" / "01"
+        wrong.mkdir(parents=True)
+        for i in range(25):
+            (wrong / f"IMG_2023-08-{i+1:02d}.jpg").write_bytes(b"data")
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        # All 25 filenames must appear
+        for i in range(25):
+            self.assertIn(f"IMG_2023-08-{i+1:02d}.jpg", text)
+        # Header should say "total", not "sample"
+        self.assertNotIn("sample", text.lower())
 
     def test_slash_dir_not_flagged_when_sep_is_dash(self):
         """File in yyyy/mm/dd must not be reported as misplaced when

@@ -28,11 +28,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from datetime import date
 from functools import total_ordering
 from pathlib import Path
 from typing import Optional
+
+# Windows Explorer "file - Copy.ext" / "file - Copy (2).ext" pattern.
+# Space (ASCII 32) sorts before period (ASCII 46), which would make Copy files
+# sort ahead of originals alphabetically; this regex lets us detect and
+# penalise them explicitly in the _key tuple.
+_COPY_RE = re.compile(r"\s*-\s*[Cc]opy(?:\s*\(\d+\))?\.\w+$")
 
 from .config import Config
 from .dates import parse_date, split_path_on_date, date_to_str
@@ -115,10 +122,14 @@ class MediaFile:
     def sequence(self) -> int:
         """Sequence number embedded in filename (e.g. ``_001``), or 0."""
         if self._seq is None:
-            import re
             m = re.search(r"[\-_]+(\d{2,3})\.\w+$", self._filename)
             self._seq = int(m.group(1)) if m else 0
         return self._seq
+
+    @property
+    def _is_copy(self) -> bool:
+        """True if the filename follows Windows 'file - Copy.ext' naming."""
+        return bool(_COPY_RE.search(self._filename))
 
     @property
     def original(self) -> bool:
@@ -186,6 +197,7 @@ class MediaFile:
             not self._deleted,
             not self.original,
             not self.misdated,
+            self._is_copy,    # Windows "- Copy" files sort after originals
             self.sequence,
             self._filename,
             str(self.path),

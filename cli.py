@@ -16,6 +16,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from pprint import pprint
 from typing import Optional, Sequence
@@ -231,7 +232,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     tee: Optional[_Tee] = None
     if not args.stdout:
-        log_path = Path.cwd() / f"dedupe.{time.time():.2f}.log"
+        log_path = Path.cwd() / f"dedupe.{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}.log"
         tee = _Tee(log_path)
         print(f"Logging to {log_path}", file=tee._orig)
 

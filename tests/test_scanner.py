@@ -392,6 +392,28 @@ class TestRunValidateSeparator(unittest.TestCase):
         # Header should say "total", not "sample"
         self.assertNotIn("sample", text.lower())
 
+    def test_dateable_report_ordered_by_filename(self):
+        """Identically-named files in different wrong directories must appear
+        adjacent in the report (sorted by filename, then path)."""
+        wrong1 = self.photos / "2020" / "01" / "01"
+        wrong2 = self.photos / "2020" / "02" / "02"
+        wrong1.mkdir(parents=True)
+        wrong2.mkdir(parents=True)
+        # Two files named AAA (appear first) and two named ZZZ (appear last)
+        (wrong1 / "AAA_2023-08-14.jpg").write_bytes(b"a1")
+        (wrong2 / "AAA_2023-08-14.jpg").write_bytes(b"a2")
+        (wrong1 / "ZZZ_2023-08-14.jpg").write_bytes(b"z1")
+        (wrong2 / "ZZZ_2023-08-14.jpg").write_bytes(b"z2")
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        # Both AAA entries must appear before both ZZZ entries
+        pos_aaa1 = text.index("AAA_2023-08-14.jpg")
+        pos_aaa2 = text.index("AAA_2023-08-14.jpg", pos_aaa1 + 1)
+        pos_zzz1 = text.index("ZZZ_2023-08-14.jpg")
+        self.assertLess(pos_aaa2, pos_zzz1)
+
     def test_slash_dir_not_flagged_when_sep_is_dash(self):
         """File in yyyy/mm/dd must not be reported as misplaced when
         default_sep='-' would normalise to yyyy-mm-dd."""

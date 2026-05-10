@@ -212,10 +212,10 @@ class MediaScanner:
                 self._report(f"  [{mf.MEDIA_TYPE}] {mf.path}")
 
         # ── Misplaced sample with current→expected + duplicate detection ──────
-        dateable = [
-            mf for dt, files in misplaced.items() if dt is not None
-            for mf in files
-        ]
+        dateable = sorted(
+            (mf for dt, files in misplaced.items() if dt is not None for mf in files),
+            key=lambda mf: (mf.filename.lower(), str(mf.path)),
+        )
 
         # Cheap existence check across all dateable misplaced files so the
         # summary can mention how many have something already at the target.

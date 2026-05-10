@@ -36,6 +36,17 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg.diagnostic_paths, [])
 
 
+class TestConfigExcludeDirsDefaults(unittest.TestCase):
+
+    def test_picasaoriginals_excluded_by_default(self):
+        cfg = Config()
+        self.assertIn(".picasaoriginals", cfg.exclude_dirs)
+
+    def test_synoeadir_excluded_by_default(self):
+        cfg = Config()
+        self.assertIn("@eaDir", cfg.exclude_dirs)
+
+
 class TestConfigFromDefaults(unittest.TestCase):
 
     def test_override_single_field(self):

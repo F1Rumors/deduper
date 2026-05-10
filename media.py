@@ -276,13 +276,17 @@ class MediaFile:
         if not self.dated:
             return f"{self}: cannot relocate — no date found"
 
-        target_dir = (
+        base_target = (
             (target_root / date_to_str(self.dated, self._config.default_sep)).resolve()
             if target_root
             else self._normalised_directory
         )
-        if target_dir is None:
+        if base_target is None:
             return f"{self}: cannot relocate — no target root configured"
+
+        # Preserve any named subdirectory below the date level (e.g. Originals/)
+        subdir = self._subdir_below_date()
+        target_dir = (base_target / subdir).resolve() if subdir else base_target
 
         if target_dir == self._dir:
             return None  # Already in the right place
@@ -301,6 +305,36 @@ class MediaFile:
             (root / date_to_str(self.dated, sep)).resolve()
             for sep in ("/", "-")
         )
+
+    def _subdir_below_date(self) -> Optional[Path]:
+        """Return the path components below the date-level directory in the
+        current path, if any.  Used to preserve subdirectory structure when
+        relocating a misplaced file.
+
+        For .../2008/11/23/Originals/ → Path('Originals')
+        For .../2008/11/23/           → None  (file is at the date level)
+        For a path with no date       → None
+
+        Note: uses the date encoded in the *current* directory path (path_date),
+        not self.dated.  For correctly-placed files these are the same; for
+        misplaced files they differ and we deliberately use the path date so
+        that the subdir is identified relative to the actual date-level parent.
+        """
+        root = self.default_root
+        if not root:
+            return None
+        path_date = parse_date(str(self._dir))
+        if not path_date:
+            return None
+        for sep in ('/', '-'):
+            dated_dir = (root / date_to_str(path_date, sep)).resolve()
+            try:
+                rel = self._dir.relative_to(dated_dir)
+                if rel != Path('.'):
+                    return rel
+            except ValueError:
+                pass
+        return None
 
     def _in_correct_subtree(self, root: Path) -> bool:
         """True if the file is in a valid dated directory or any subdirectory of one.

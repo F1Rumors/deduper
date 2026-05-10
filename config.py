@@ -61,7 +61,7 @@ class Config:
     # ── Exclusions ────────────────────────────────────────────────────────
     # Directory names pruned from tree walks.  Configurable via INI
     # ``exclude_dirs`` or CLI ``--exclude-dir``.
-    exclude_dirs: frozenset = frozenset(["@SynoEAStream", "@eaDir", "Misc"])
+    exclude_dirs: frozenset = frozenset(["@SynoEAStream", "@eaDir", "Misc", ".picasaoriginals"])
     # Regex matched against filenames to skip.  Configurable via INI
     # ``exclude_re`` or CLI ``--exclude-re``.
     exclude_files_re: str = (

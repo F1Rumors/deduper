@@ -556,6 +556,47 @@ class TestMediaFileFixDate(unittest.TestCase):
         msg = mf.fix_date(registry, dir_cache)
         self.assertIsNone(msg)
 
+    def test_subdir_preserved_on_relocation(self):
+        """File in wrong_date/Originals/ must land in correct_date/Originals/."""
+        src_subdir = self.photos / "2023" / "01" / "01" / "Originals"
+        src_subdir.mkdir(parents=True)
+        (src_subdir / "photo.jpg").write_bytes(b"data")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2023, 8, 14)
+        cfg = make_cfg(photos_path=self.photos, dryrun=False)
+        mf = ImageFile(src_subdir, "photo.jpg", cfg, exif_reader=reader)
+        registry = MediaRegistry(cfg)
+        msg = mf.fix_date(registry, DirCache())
+        expected = self.photos / "2023" / "08" / "14" / "Originals" / "photo.jpg"
+        self.assertIsNone(msg, msg)
+        self.assertTrue(expected.exists())
+        self.assertFalse((src_subdir / "photo.jpg").exists())
+
+    def test_subdir_preserved_dryrun_message(self):
+        """Dryrun message must include the subdir in the target path."""
+        src_subdir = self.photos / "2023" / "01" / "01" / "Originals"
+        src_subdir.mkdir(parents=True)
+        (src_subdir / "photo.jpg").write_bytes(b"data")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2023, 8, 14)
+        cfg = make_cfg(photos_path=self.photos, dryrun=True)
+        mf = ImageFile(src_subdir, "photo.jpg", cfg, exif_reader=reader)
+        msg = mf.fix_date(MediaRegistry(cfg), DirCache())
+        self.assertIsNotNone(msg)
+        self.assertIn("Originals", msg)
+
+    def test_already_in_place_with_subdir_returns_none(self):
+        """File already in correct_date/Originals/ must not be moved."""
+        subdir = self.photos / "2023" / "08" / "14" / "Originals"
+        subdir.mkdir(parents=True)
+        (subdir / "photo.jpg").write_bytes(b"data")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2023, 8, 14)
+        cfg = make_cfg(photos_path=self.photos)
+        mf = ImageFile(subdir, "photo.jpg", cfg, exif_reader=reader)
+        msg = mf.fix_date(MediaRegistry(cfg), DirCache())
+        self.assertIsNone(msg)
+
 
 # ── Sorting / comparison ───────────────────────────────────────────────────
 
@@ -1071,6 +1112,75 @@ class TestRegistryMoveXdev(unittest.TestCase):
         # New path cached; old path evicted.
         self.assertIn((dst_dir / "photo.jpg").resolve(), registry._cache)
         self.assertNotIn((src_dir / "photo.jpg").resolve(), registry._cache)
+
+
+# ── _subdir_below_date ────────────────────────────────────────────────────
+
+class TestSubdirBelowDate(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+
+    def _make_in(self, rel_dir: str, filename: str, exif_date=None) -> ImageFile:
+        dirpath = self.photos / Path(rel_dir)
+        dirpath.mkdir(parents=True, exist_ok=True)
+        (dirpath / filename).write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = exif_date
+        return ImageFile(dirpath, filename, make_cfg(photos_path=self.photos), exif_reader=reader)
+
+    def test_none_when_at_date_level(self):
+        mf = self._make_in("2008/03/24", "photo.jpg", date(2008, 3, 24))
+        self.assertIsNone(mf._subdir_below_date())
+
+    def test_returns_subdir_for_one_level_below(self):
+        mf = self._make_in("2008/11/23/Originals", "photo.jpg", date(2008, 3, 24))
+        self.assertEqual(mf._subdir_below_date(), Path("Originals"))
+
+    def test_returns_subdir_for_deep_nesting(self):
+        mf = self._make_in("2008/11/23/Originals/Raw", "photo.jpg", date(2008, 3, 24))
+        self.assertEqual(mf._subdir_below_date(), Path("Originals/Raw"))
+
+    def test_uses_path_date_not_exif_date(self):
+        """For a misplaced file, path_date (2008-11-23) differs from self.dated
+        (2008-03-24).  _subdir_below_date must use the path date to locate
+        the date-level parent, not the EXIF date."""
+        mf = self._make_in("2008/11/23/Originals", "photo.jpg", date(2008, 3, 24))
+        # If it incorrectly used self.dated (2008-03-24), it would try to
+        # relativize against photos/2008/03/24 — which fails → returns None.
+        self.assertEqual(mf._subdir_below_date(), Path("Originals"))
+
+    def test_none_when_no_date_in_path(self):
+        (self.tmp / "inbox").mkdir(exist_ok=True)
+        (self.tmp / "inbox" / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2008, 3, 24)
+        mf = ImageFile(self.tmp / "inbox", "photo.jpg",
+                       make_cfg(photos_path=self.photos), exif_reader=reader)
+        self.assertIsNone(mf._subdir_below_date())
+
+    def test_none_when_no_root(self):
+        (self.tmp / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2008, 3, 24)
+        mf = ImageFile(self.tmp, "photo.jpg", make_cfg(), exif_reader=reader)
+        self.assertIsNone(mf._subdir_below_date())
+
+    def test_none_for_load_path_outside_library(self):
+        """Files from an external import path should not get a subdir extracted
+        even if the import path contains a date component."""
+        inbox = self.tmp / "inbox" / "2008" / "11" / "23" / "Originals"
+        inbox.mkdir(parents=True)
+        (inbox / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2008, 3, 24)
+        # photos_path is self.photos; file is under inbox — relative_to fails
+        mf = ImageFile(inbox, "photo.jpg",
+                       make_cfg(photos_path=self.photos), exif_reader=reader)
+        self.assertIsNone(mf._subdir_below_date())
 
 
 # ── _in_correct_subtree ───────────────────────────────────────────────────

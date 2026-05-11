@@ -55,11 +55,11 @@ _UNSET = object()  # Sentinel for uninitialised cached properties
 # ── Supported extensions ───────────────────────────────────────────────────
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset(
-    ["cr2", "exr", "gif", "jbf", "jpg", "jpeg", "png", "spp", "tif", "tiff", "xmp"]
+    ["cr2", "exr", "gif", "jpg", "jpeg", "png", "spp", "tif", "tiff", "xmp"]
 )
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(["avi", "mp4", "mov", "3gp", "3gpp", "mkv"])
 AUDIO_EXTENSIONS: frozenset[str] = frozenset(["aac", "m4a", "mp3", "wav"])
-IGNORED_EXTENSIONS: frozenset[str] = AUDIO_EXTENSIONS | frozenset(["thm", "tmp", "m", "info"])
+IGNORED_EXTENSIONS: frozenset[str] = AUDIO_EXTENSIONS | frozenset(["thm", "tmp", "m", "info", "jbf"])
 
 
 # ── Base class ─────────────────────────────────────────────────────────────
@@ -485,7 +485,7 @@ class ImageFile(MediaFile):
         self._exif_reader = exif_reader or ImageExifReader(debug=config.debug)
 
     def _exif_date(self) -> Optional[date]:
-        return self._exif_reader.get_date(self.path)
+        return self._exif_reader.get_date(self.path, file_size=self._size)
 
     @property
     def default_root(self) -> Optional[Path]:

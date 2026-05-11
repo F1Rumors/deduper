@@ -593,7 +593,10 @@ class MediaScanner:
         n = len(image_files)
         print(
             f"  Pre-fetching EXIF for {n:,d} images "
-            f"(pool_size={self._cfg.pool_size}, chunksize={self._cfg.pool_chunksize})...",
+            f"(pool_size={self._cfg.pool_size}, chunksize={self._cfg.pool_chunksize})...\n"
+            f"  WARNING: --parallel spawns {self._cfg.pool_size} worker processes that read "
+            f"files concurrently.  On I/O-bound storage (NAS, network drives) this can "
+            f"increase seek contention and slow down other services on the same host.",
             flush=True,
         )
         args = [str(mf.path) for mf in image_files]

@@ -479,7 +479,13 @@ class MediaScanner:
         n_all = len(all_files)
         with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
             for i, mf in enumerate(all_files):
-                wd.arm(f"classifying {mf.path}")
+                ext = mf.path.suffix.lstrip(".").lower()
+                timeout = (
+                    self._cfg.slow_ext_timeout
+                    if ext in self._cfg.slow_extensions
+                    else None
+                )
+                wd.arm(f"classifying {mf.path}", timeout=timeout)
                 try:
                     if mf.validate():
                         by_misplaced[mf.dated].append(mf)

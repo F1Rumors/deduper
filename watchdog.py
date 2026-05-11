@@ -142,6 +142,7 @@ class Watchdog:
         self._deadline = 0.0
         self._reason = ""
         self._arm_time: Optional[float] = None
+        self._current_timeout: float = default_timeout
         self._stop = threading.Event()
         self._timer = PhaseTimer()
         self._thread = threading.Thread(
@@ -160,13 +161,15 @@ class Watchdog:
         of a loop to create a per-item heartbeat.
         """
         now = time.monotonic()
-        deadline = now + (timeout if timeout is not None else self._default_timeout)
+        effective = timeout if timeout is not None else self._default_timeout
+        deadline = now + effective
         with self._lock:
             if self._armed and self._arm_time is not None:
                 elapsed_ms = (now - self._arm_time) * 1000.0
                 self._timer.record(elapsed_ms, self._reason)
             self._reason = reason
             self._deadline = deadline
+            self._current_timeout = effective
             self._armed = True
             self._arm_time = now
 
@@ -209,7 +212,7 @@ class Watchdog:
                 continue
             sys.stdout.flush()
             print(
-                f"\nFatal: watchdog timeout ({self._default_timeout:.0f}s) — {reason}",
+                f"\nFatal: watchdog timeout ({self._current_timeout:.0f}s) — {reason}",
                 file=sys.stderr,
                 flush=True,
             )

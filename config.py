@@ -62,6 +62,10 @@ class Config:
     # Maximum seconds allowed for a single NAS file read (EXIF, hash, classify).
     # If any per-file operation exceeds this the process hard-exits via os._exit.
     hash_timeout: float = 10.0
+    # Extensions that get a longer classify timeout (e.g. large TIFFs with
+    # IFD0 at end of file requiring a slow NAS seek).
+    slow_extensions: frozenset = frozenset({"tif", "tiff"})
+    slow_ext_timeout: float = 120.0
 
     # ── Exclusions ────────────────────────────────────────────────────────
     # Directory names pruned from tree walks.  Configurable via INI
@@ -203,6 +207,14 @@ class Config:
                 self.exiftool_executable = g["exiftool_path"]
             if "hash_timeout" in g:
                 self.hash_timeout = g.getfloat("hash_timeout")
+            if "slow_extensions" in g:
+                self.slow_extensions = frozenset(
+                    e.strip().lstrip(".").lower()
+                    for e in g["slow_extensions"].split(",")
+                    if e.strip()
+                )
+            if "slow_ext_timeout" in g:
+                self.slow_ext_timeout = g.getfloat("slow_ext_timeout")
 
         if "ACTIONS" in parser:
             a = parser["ACTIONS"]

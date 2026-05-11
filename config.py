@@ -58,6 +58,11 @@ class Config:
     # Set via INI [GLOBALS] exiftool_path or CLI --exiftool.
     exiftool_executable: Optional[str] = None
 
+    # ── Watchdog ──────────────────────────────────────────────────────────
+    # Maximum seconds allowed for a single NAS file read (EXIF, hash, classify).
+    # If any per-file operation exceeds this the process hard-exits via os._exit.
+    hash_timeout: float = 10.0
+
     # ── Exclusions ────────────────────────────────────────────────────────
     # Directory names pruned from tree walks.  Configurable via INI
     # ``exclude_dirs`` or CLI ``--exclude-dir``.
@@ -100,26 +105,33 @@ class Config:
         if args.loadpath:
             cfg.import_path = Path(args.loadpath)
 
-        # --fix opts into real changes; --debug/--dryrun override it back to True
-        if args.fix:
-            cfg.dryrun = False
-
         # Debug/dryrun — command line only (config file variant applied above)
         if args.debug:
             cfg.debug = True
-            cfg.dryrun = True
+            cfg.dryrun = True  # safe default for debug without --fix
             logging.getLogger().setLevel(logging.DEBUG)
             logging.getLogger("PIL").setLevel(logging.INFO)
         if args.dryrun:
             cfg.dryrun = True
+        # --fix is applied last so it wins over --debug and config-file DRYRUN.
+        # This lets you run "deduper --debug --fix" to get verbose output while
+        # actually performing changes.
+        if args.fix:
+            cfg.dryrun = False
 
-        # Actions
-        cfg.do_load = bool(
-            args.load or args.loadpath or cfg.do_load
-        )
-        cfg.do_dupes = bool(args.dupes or cfg.do_dupes)
-        cfg.do_validate = bool(args.validate or cfg.do_validate)
-        cfg.do_prune = bool(args.prune or cfg.do_prune)
+        # Actions — BooleanOptionalAction gives True/False/None.
+        # None means "not specified on CLI" → keep the config-file value.
+        # --loadpath always implies --load regardless of --no-load.
+        if args.loadpath:
+            cfg.do_load = True
+        elif args.load is not None:
+            cfg.do_load = bool(args.load)
+        if args.dupes is not None:
+            cfg.do_dupes = bool(args.dupes)
+        if args.validate is not None:
+            cfg.do_validate = bool(args.validate)
+        if args.prune is not None:
+            cfg.do_prune = bool(args.prune)
         cfg.do_force = args.force
         cfg.do_compare_exif = args.compareExif
         cfg.do_exif = args.exif
@@ -189,6 +201,8 @@ class Config:
                 self.pool_chunksize = g.getint("POOL_CHUNKSIZE")
             if "exiftool_path" in g:
                 self.exiftool_executable = g["exiftool_path"]
+            if "hash_timeout" in g:
+                self.hash_timeout = g.getfloat("hash_timeout")
 
         if "ACTIONS" in parser:
             a = parser["ACTIONS"]
@@ -222,6 +236,10 @@ class Config:
             raise ValueError(
                 "No action specified. Use --load, --dupes, --validate, or supply file paths."
             )
+        # Overlap check is scoped to do_load intentionally: validate/dupes only
+        # scan photos_path / videos_path (not import_path), so a misconfigured
+        # import_path that sits inside the library is harmless for those actions.
+        # If import_path were ever used outside of load, this guard must be widened.
         if self.do_load and self.import_path:
             for lib_path in filter(None, [self.photos_path, self.videos_path]):
                 if (self.import_path.is_relative_to(lib_path)

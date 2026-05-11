@@ -27,6 +27,11 @@ def parse_date(s: str) -> Optional[date]:
     Accepts separators ``-``, ``.``, ``/``, or none between year/month/day.
     Rejects structurally matching but calendar-invalid strings (e.g. month 13).
 
+    Note: separator-free 8-digit strings (e.g. ``20230814``) are accepted by
+    design — they appear in camera-generated filenames.  A side-effect is that
+    numeric serial numbers of 8+ digits may be misread as dates; this is an
+    accepted trade-off for a personal photo library context.
+
     >>> parse_date("holiday/2023/08/14/IMG_1234.jpg")
     datetime.date(2023, 8, 14)
     >>> parse_date("no date here") is None

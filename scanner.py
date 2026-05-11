@@ -29,6 +29,7 @@ from .dates import parse_date
 from .filesystem import DirCache, walk_media
 from .hashing import hash_file
 from .media import ImageFile, VideoFile, MediaFile, MediaRegistry
+from .watchdog import Watchdog
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,23 @@ class MediaScanner:
             self._report("No misplaced files found")
             return
 
+        dateable = self._report_misplaced_summary(misplaced)
+
+        if self._cfg.dryrun:
+            return
+
+        self._run_fix_loop(dateable)
+
+    def _report_misplaced_summary(
+        self, misplaced: dict
+    ) -> list[MediaFile]:
+        """Emit the validate report sections and return the dateable file list.
+
+        Writes three sections to the report: date+type summary table, undatable
+        sample, and a per-file current→expected listing.  Returns the sorted
+        list of dateable misplaced files so ``run_validate`` can pass it to
+        ``_run_fix_loop`` without recomputing it.
+        """
         # ── Summary by date + type ─────────────────────────────────────────
         sorted_dates = sorted(misplaced.keys(), key=lambda d: d or date.min)
         total_img = total_vid = 0
@@ -221,8 +239,8 @@ class MediaScanner:
         # summary can mention how many have something already at the target.
         n_has_target = sum(
             1 for mf in dateable
-            if mf._normalised_directory
-            and (mf._normalised_directory / mf.filename).exists()
+            if mf._effective_target_dir
+            and (mf._effective_target_dir / mf.filename).exists()
         )
         if n_has_target:
             self._report(
@@ -236,7 +254,7 @@ class MediaScanner:
                 f"(current directory → should be in):"
             )
             for mf in dateable:
-                expected = mf._normalised_directory
+                expected = mf._effective_target_dir
                 path_date = parse_date(str(mf.path.parent))
 
                 # Check whether the target already holds this file.
@@ -273,13 +291,19 @@ class MediaScanner:
                 parts.append(f"{outcomes['skip']:,d} would skip (collision/no root)")
             self._report("\nExpected fix outcomes: " + (", ".join(parts) if parts else "none"))
 
-        if self._cfg.dryrun:
-            return
+        return dateable
 
-        # ── Fix loop with outcome tracking ──────────────────────────────────
+    def _run_fix_loop(self, dateable: list[MediaFile]) -> None:
+        """Relocate all dateable misplaced files and emit a fix summary.
+
+        Iterates dateable only — undated files cannot be relocated and are
+        already reported in the undatable sample above.  Including them here
+        would inflate the error count with "no date found" messages that are
+        not actionable errors.
+        """
         n_relocated = n_to_overflow = n_removed_dup = n_errors = 0
-        for mf in itertools.chain.from_iterable(misplaced.values()):
-            expected_dir = mf._normalised_directory
+        for mf in dateable:
+            expected_dir = mf._effective_target_dir
             try:
                 msg = mf.fix_date(self._registry, self._dir_cache)
             except Exception as exc:
@@ -436,11 +460,16 @@ class MediaScanner:
         by_misplaced: dict = defaultdict(list)
         all_files = entry['all_files']
         n_all = len(all_files)
-        for i, mf in enumerate(all_files):
-            if mf.validate():
-                by_misplaced[mf.dated].append(mf)
-            if (i + 1) % 1000 == 0:  # pragma: no cover
-                print(f"\r  Classifying {i + 1:,d}/{n_all:,d}...", end="", flush=True)
+        with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
+            for i, mf in enumerate(all_files):
+                wd.arm(f"classifying {mf.path}")
+                try:
+                    if mf.validate():
+                        by_misplaced[mf.dated].append(mf)
+                finally:
+                    wd.disarm()
+                if (i + 1) % 1000 == 0:  # pragma: no cover
+                    print(f"\r  Classifying {i + 1:,d}/{n_all:,d}...", end="", flush=True)
         n_misplaced = sum(len(v) for v in by_misplaced.values())
         print(f"\r  Classified {n_all:,d} files — {n_misplaced:,d} misplaced")
         sys.stdout.flush()
@@ -459,7 +488,7 @@ class MediaScanner:
         """
         counts: dict[str, int] = {'relocate': 0, 'remove_dup': 0, 'overflow': 0, 'skip': 0}
         for mf in files:
-            expected = mf._normalised_directory
+            expected = mf._effective_target_dir
             if expected is None:
                 counts['skip'] += 1
                 continue
@@ -552,19 +581,28 @@ class MediaScanner:
         paths = [str(mf.path) for mf in image_files]
         path_to_mf = {str(mf.path): mf for mf in image_files}
 
-        with Pool(self._cfg.pool_size) as pool:
-            done = 0
-            for path_str, d in pool.imap_unordered(
-                _image_exif_worker, paths, chunksize=self._cfg.pool_chunksize
-            ):
-                if d is not None:
-                    mf = path_to_mf.get(path_str)
-                    if mf:
-                        mf._dated = d  # Populate cache; skip filename fallback
-                # else: leave as _UNSET → filename fallback runs on first access
-                done += 1
-                if done % 1000 == 0:  # pragma: no cover
-                    print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
+        n_remain = n
+        with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
+            wd.arm(f"image EXIF prefetch — waiting for first of {n} results")
+            with Pool(self._cfg.pool_size) as pool:
+                done = 0
+                for path_str, d in pool.imap_unordered(
+                    _image_exif_worker, paths, chunksize=self._cfg.pool_chunksize
+                ):
+                    n_remain -= 1
+                    wd.arm(
+                        f"image EXIF prefetch — {n_remain} of {n} remaining"
+                        f" (last: {path_str})"
+                    )
+                    if d is not None:
+                        mf = path_to_mf.get(path_str)
+                        if mf:
+                            mf._dated = d  # Populate cache; skip filename fallback
+                    # else: leave as _UNSET → filename fallback runs on first access
+                    done += 1
+                    if done % 1000 == 0:  # pragma: no cover
+                        print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
+            wd.disarm()
 
         print(f"\r  EXIF pre-fetch complete ({n:,d} images)", flush=True)
 
@@ -593,13 +631,22 @@ class MediaScanner:
         )
         try:
             path_to_mf = {mf.path: mf for mf in video_files}
+            n_remain = n
             done = 0
-            for path, d in reader.get_date_batch(path_to_mf.keys()):
-                if d is not None:
-                    path_to_mf[path]._dated = d
-                done += 1
-                if done % 500 == 0:  # pragma: no cover
-                    print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
+            with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
+                wd.arm(f"video EXIF prefetch — waiting for first of {n} results")
+                for path, d in reader.get_date_batch(path_to_mf.keys()):
+                    n_remain -= 1
+                    wd.arm(
+                        f"video EXIF prefetch — {n_remain} of {n} remaining"
+                        f" (last: {path})"
+                    )
+                    if d is not None:
+                        path_to_mf[path]._dated = d
+                    done += 1
+                    if done % 500 == 0:  # pragma: no cover
+                        print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
+                wd.disarm()
         finally:
             reader._terminate()
 
@@ -627,26 +674,39 @@ class MediaScanner:
 
         if self._cfg.parallel:
             hash_args = [(str(mf.path), mf.size) for mf in candidates]
-            with Pool(self._cfg.pool_size) as pool:
-                done = 0
-                for path_str, hex_hash in pool.imap_unordered(
-                    _hash_worker, hash_args, chunksize=self._cfg.pool_chunksize
-                ):
-                    if hex_hash is not None:
-                        mf = path_to_mf[path_str]
-                        groups[(mf.size, hex_hash)].append(mf)
-                    done += 1
-                    if done % 1000 == 0:  # pragma: no cover
-                        print(f"\r  Hashed {done:,d}/{n:,d}...", end="", flush=True)
+            n_remain = n
+            with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
+                wd.arm(f"hashing — waiting for first of {n} results")
+                with Pool(self._cfg.pool_size) as pool:
+                    done = 0
+                    for path_str, hex_hash in pool.imap_unordered(
+                        _hash_worker, hash_args, chunksize=self._cfg.pool_chunksize
+                    ):
+                        n_remain -= 1
+                        wd.arm(
+                            f"hashing — {n_remain} of {n} remaining"
+                            f" (last: {path_str})"
+                        )
+                        if hex_hash is not None:
+                            mf = path_to_mf[path_str]
+                            groups[(mf.size, hex_hash)].append(mf)
+                        done += 1
+                        if done % 1000 == 0:  # pragma: no cover
+                            print(f"\r  Hashed {done:,d}/{n:,d}...", end="", flush=True)
+                wd.disarm()
         else:
-            for i, mf in enumerate(candidates):
-                if i % 1000 == 0 and i:  # pragma: no cover
-                    print(f"\r  Hashed {i:,d}...", end="")
-                    sys.stdout.flush()
-                try:
-                    groups[(mf.size, mf.hash)].append(mf)
-                except OSError as exc:
-                    logger.error("Could not hash %s: %s", mf.path, exc)
+            with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
+                for i, mf in enumerate(candidates):
+                    if i % 1000 == 0 and i:  # pragma: no cover
+                        print(f"\r  Hashed {i:,d}...", end="")
+                        sys.stdout.flush()
+                    wd.arm(f"hashing {mf.path}")
+                    try:
+                        groups[(mf.size, mf.hash)].append(mf)
+                    except OSError as exc:
+                        logger.error("Could not hash %s: %s", mf.path, exc)
+                    finally:
+                        wd.disarm()
 
         print(f"\r  Hashed {n:,d} files")
         return {k: sorted(v) for k, v in groups.items() if len(v) > 1}

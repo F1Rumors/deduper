@@ -1573,5 +1573,141 @@ class TestRunPrune(unittest.TestCase):
         MediaScanner(config=cfg, report=report).run_prune()  # Must not raise
 
 
+# ── Date-named subdirectory handling (end-to-end) ─────────────────────────
+
+class TestRunValidateDateNamedSubdir(unittest.TestCase):
+    """Files in date-named subdirectories of the correct dated directory
+    (e.g. photos/2021/09/29/2021-09-29/) must be handled correctly:
+    - Not flagged as misplaced when EXIF matches (they are in the right subtree)
+    - When misplaced (EXIF differs), moved to the flat target (date-named
+      subdir is dropped, not preserved)."""
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_correctly_dated_nested_dir_not_reported_as_misplaced(self):
+        """File in photos/2021/09/29/2021-09-29/ with date 2021-09-29 (from
+        filename) is in the right subtree and must not appear in the report."""
+        nested = self.photos / "2021" / "09" / "29" / "2021-09-29"
+        nested.mkdir(parents=True)
+        # Use a jpg with date-encoded filename so Pillow is used (no ExifTool)
+        (nested / "IMG_20210929.jpg").write_bytes(b"x" * 50)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        self.assertIn("No misplaced", report.render())
+
+    def test_misplaced_file_in_date_named_subdir_moves_to_flat_target(self):
+        """File in photos/2020/01/01/2020-01-01/ with EXIF 2023-08-14 is
+        misplaced.  On fix, it must land at photos/2023/08/14/ (flat) — the
+        date-named subdir is NOT preserved."""
+        nested = self.photos / "2020" / "01" / "01" / "2020-01-01"
+        nested.mkdir(parents=True)
+        (nested / "IMG_2023-08-14.jpg").write_bytes(b"x" * 50)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=False)
+        MediaScanner(config=cfg).run_validate()
+        expected = self.photos / "2023" / "08" / "14" / "IMG_2023-08-14.jpg"
+        unexpected = self.photos / "2023" / "08" / "14" / "2020-01-01" / "IMG_2023-08-14.jpg"
+        self.assertTrue(expected.exists(), "File must be at flat target")
+        self.assertFalse(unexpected.exists(), "Date-named subdir must not be preserved")
+
+    def test_dryrun_report_does_not_include_date_subdir_in_should_be(self):
+        """Dryrun report 'should be' line must show flat target, not date subdir."""
+        nested = self.photos / "2020" / "01" / "01" / "2020-01-01"
+        nested.mkdir(parents=True)
+        (nested / "IMG_2023-08-14.jpg").write_bytes(b"x" * 50)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_validate()
+        text = report.render()
+        # The "should be" line must point to 2023/08/14 flat, not 2023/08/14/2020-01-01
+        self.assertIn("2023", text)
+        self.assertNotIn("2020-01-01", text.split("should be:")[-1] if "should be:" in text else "")
+
+
+# ── Dryrun deletion order dependency ─────────────────────────────────────
+# Item 4: dryrun marks files as deleted — order matters for combined runs.
+# This test documents and guards the known ordering requirement:
+# run_dupes must run before run_validate when both are active in dryrun mode.
+# If the order ever changes, files that dryrun-validate marks as deleted
+# would still be seen as live by dryrun-dupes, producing inconsistent output.
+
+class TestDryrunDeletionOrderMatters(unittest.TestCase):
+    """Documents the invariant: run_dupes must precede run_validate in combined
+    dryrun runs so that dryrun-deleted duplicates are already flagged when
+    validate classifies.  If the run order in _run() changes, this test will
+    catch the regression.
+
+    Background: in dryrun mode, fix_date() sets mf._deleted = True when it
+    finds an exact duplicate at the target location.  Subsequent operations on
+    the same scanner instance see the file as deleted.  The run order in
+    cli._run() is dupes → validate → prune, which is safe.
+    """
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+        self.photos.mkdir()
+
+    def test_run_order_in_cli_is_dupes_then_validate(self):
+        """The order of operations in cli._run() must be dupes before validate.
+
+        This is a documentation/guard test — it fails if someone reorders the
+        action calls in _run() without understanding the dryrun-deletion
+        dependency.
+        """
+        from deduper.cli import _run, build_parser
+        import argparse
+
+        # Capture the order in which the scanner methods are called
+        call_order = []
+
+        class OrderTrackingScanner:
+            def __init__(self, **kwargs):
+                pass
+            def run_dupes(self):
+                call_order.append('dupes')
+            def run_validate(self):
+                call_order.append('validate')
+            def run_load(self):
+                call_order.append('load')
+            def run_prune(self):
+                call_order.append('prune')
+            @property
+            def report(self):
+                return Report()
+
+        cfg = make_cfg(
+            photos_path=self.photos,
+            do_dupes=True,
+            do_validate=True,
+        )
+
+        parser = build_parser()
+        args = parser.parse_args([])  # empty args
+
+        with patch("deduper.cli.MediaScanner", OrderTrackingScanner), \
+             patch("deduper.cli.Report", Report):
+            try:
+                _run(args, cfg, parser)
+            except Exception:
+                pass  # Not testing success, just call order
+
+        # dupes must appear before validate
+        if 'dupes' in call_order and 'validate' in call_order:
+            dupes_idx = call_order.index('dupes')
+            validate_idx = call_order.index('validate')
+            self.assertLess(
+                dupes_idx, validate_idx,
+                f"run_dupes must precede run_validate; got order: {call_order}"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

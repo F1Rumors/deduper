@@ -767,6 +767,64 @@ class TestNormalisedDirectory(unittest.TestCase):
         self.assertIsNone(mf._normalised_directory)
 
 
+# ── _effective_target_dir ─────────────────────────────────────────────────
+
+class TestEffectiveTargetDir(unittest.TestCase):
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.photos = self.tmp / "photos"
+
+    def _make_in(self, rel_dir: str, filename: str, exif_date=None) -> ImageFile:
+        dirpath = self.photos / Path(rel_dir)
+        dirpath.mkdir(parents=True, exist_ok=True)
+        (dirpath / filename).write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = exif_date
+        return ImageFile(dirpath, filename, make_cfg(photos_path=self.photos), exif_reader=reader)
+
+    def test_none_when_no_date(self):
+        mf = make_image(self.tmp, "undated.jpg")
+        self.assertIsNone(mf._effective_target_dir)
+
+    def test_none_when_no_root(self):
+        (self.tmp / "photo.jpg").write_bytes(b"x")
+        reader = MagicMock()
+        reader.get_date.return_value = date(2008, 3, 24)
+        mf = ImageFile(self.tmp, "photo.jpg", make_cfg(), exif_reader=reader)
+        self.assertIsNone(mf._effective_target_dir)
+
+    def test_equals_normalised_dir_when_at_date_level(self):
+        """File at the date level: effective target == normalised_directory."""
+        mf = self._make_in("2008/11/22", "IMG_0874.JPG", date(2008, 3, 24))
+        self.assertEqual(mf._effective_target_dir, mf._normalised_directory)
+
+    def test_includes_subdir_for_misplaced_file_in_originals(self):
+        """File in wrong_date/Originals/ → effective target is correct_date/Originals/."""
+        mf = self._make_in("2008/11/22/Originals", "IMG_0874.JPG", date(2008, 3, 24))
+        expected = (self.photos / "2008" / "03" / "24" / "Originals").resolve()
+        self.assertEqual(mf._effective_target_dir, expected)
+
+    def test_includes_deep_subdir(self):
+        """Multi-level subdir is preserved in the effective target."""
+        mf = self._make_in("2008/11/22/Originals/Raw", "photo.jpg", date(2008, 3, 24))
+        expected = (self.photos / "2008" / "03" / "24" / "Originals" / "Raw").resolve()
+        self.assertEqual(mf._effective_target_dir, expected)
+
+    def test_equals_normalised_dir_when_correctly_placed(self):
+        """Correctly-placed file has no subdir → effective target == normalised_directory."""
+        mf = self._make_in("2008/03/24", "photo.jpg", date(2008, 3, 24))
+        self.assertEqual(mf._effective_target_dir, mf._normalised_directory)
+
+    def test_equals_normalised_dir_when_subdir_is_date_pattern(self):
+        """When the detected subdir is itself a date (e.g. 2021-09-29), it is
+        dropped by _subdir_below_date, so effective target == normalised_directory."""
+        mf = self._make_in("2021/09/29/2021-09-29", "VID.mp4", date(2021, 9, 29))
+        self.assertEqual(mf._effective_target_dir, mf._normalised_directory)
+
+
 # ── __eq__, __lt__, __hash__, __repr__ ────────────────────────────────────
 
 class TestMediaFileSpecialMethods(unittest.TestCase):
@@ -1181,6 +1239,23 @@ class TestSubdirBelowDate(unittest.TestCase):
         mf = ImageFile(inbox, "photo.jpg",
                        make_cfg(photos_path=self.photos), exif_reader=reader)
         self.assertIsNone(mf._subdir_below_date())
+
+    def test_none_for_date_named_subdir(self):
+        """A subdir that is itself a date (e.g. .../2021/09/29/2021-09-29/)
+        is a layout mistake and must be dropped, not preserved."""
+        mf = self._make_in("2021/09/29/2021-09-29", "VID.mp4", date(2021, 9, 29))
+        self.assertIsNone(mf._subdir_below_date())
+
+    def test_none_for_dash_date_named_subdir(self):
+        """Same rule applies when the inner date uses dash format."""
+        mf = self._make_in("2021/09/29/2021-09-29", "VID.mp4", date(2021, 9, 29))
+        self.assertIsNone(mf._subdir_below_date())
+
+    def test_preserves_mixed_subdir_starting_with_date(self):
+        """Two-level subdir whose first component is a date is kept as-is —
+        it is not 'only a date pattern'."""
+        mf = self._make_in("2008/11/23/2008-11-23/Originals", "photo.jpg", date(2008, 3, 24))
+        self.assertEqual(mf._subdir_below_date(), Path("2008-11-23/Originals"))
 
 
 # ── _in_correct_subtree ───────────────────────────────────────────────────

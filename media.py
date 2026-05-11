@@ -31,7 +31,7 @@ import os
 import re
 import shutil
 from datetime import date
-from functools import total_ordering
+from functools import cached_property, total_ordering
 from pathlib import Path
 from typing import Optional
 
@@ -184,13 +184,32 @@ class MediaFile:
         """Root directory under which this media type should live."""
         raise NotImplementedError  # pragma: no cover
 
-    @property
+    @cached_property
+    def _effective_target_dir(self) -> Optional[Path]:
+        """The directory fix_date() would move this file into.
+
+        Equivalent to ``_normalised_directory`` plus any named subdirectory
+        below the date level in the current path (e.g. ``Originals/``), so
+        that the report and collision checks agree with what fix_date() does.
+
+        Cached — invalidated by MediaRegistry.move() via __dict__.pop().
+        """
+        base = self._normalised_directory
+        if not base:
+            return None
+        subdir = self._subdir_below_date()
+        return (base / subdir).resolve() if subdir else base
+
+    @cached_property
     def _normalised_directory(self) -> Optional[Path]:
         """The directory this file *should* be in, or None if undetermined.
 
         Always resolved so that comparisons against ``self._dir`` (also
         resolved) work correctly even when the path passes through symlinks
         (e.g. DSM's /opt → /volume1/@Entware/opt).
+
+        Cached — depends only on dated and default_root, which are immutable
+        after construction, so no invalidation is needed.
         """
         if not self.dated or not self.default_root:
             return None
@@ -285,7 +304,10 @@ class MediaFile:
             return f"{self}: cannot relocate — no target root configured"
 
         # Preserve any named subdirectory below the date level (e.g. Originals/)
-        subdir = self._subdir_below_date()
+        # only when relocating within the library (target_root not overridden).
+        # A caller-supplied target_root is an explicit destination; applying a
+        # subdir extracted from the *source* library path would be incorrect.
+        subdir = self._subdir_below_date() if target_root is None else None
         target_dir = (base_target / subdir).resolve() if subdir else base_target
 
         if target_dir == self._dir:
@@ -331,6 +353,10 @@ class MediaFile:
             try:
                 rel = self._dir.relative_to(dated_dir)
                 if rel != Path('.'):
+                    # A single-component subdir that is itself a date (e.g.
+                    # .../2021/09/29/2021-09-29/) is a layout mistake — drop it.
+                    if len(rel.parts) == 1 and parse_date(rel.parts[0]) is not None:
+                        return None
                     return rel
             except ValueError:
                 pass
@@ -401,7 +427,14 @@ class MediaFile:
         if target_path.exists():
             existing = registry.get_or_create(target_dir, self._filename)
             if existing and self.hash == existing.hash:
-                # Exact duplicate — delete self
+                # Exact duplicate — delete self.
+                # In dryrun mode we mark self._deleted = True so that downstream
+                # logic (scan cache, subsequent validate passes) treats this file
+                # as gone.  This is intentional: dryrun simulates the post-fix
+                # state.  Side-effect: if --dupes and --validate are combined in
+                # dryrun mode, the action ORDER matters — run_dupes before
+                # run_validate so dryrun-deleted files are already gone when
+                # validate classifies.  See test_dryrun_deletion_order_matters.
                 if no_changes:
                     self._deleted = True
                     return f"dryrun: {self} is a duplicate of {target_path} — would delete"
@@ -424,6 +457,13 @@ class MediaFile:
             return f"dryrun: would move {self.path} → {target_path}"
 
         registry.move(self, target_dir, target_path.name)
+        # Design note — no post-move verification (intentional trade-off):
+        # shutil.move() uses os.rename() on the same filesystem (atomic) or
+        # copy+delete across devices.  We do not re-stat the destination after
+        # the move because the extra I/O on a NAS would be significant at scale.
+        # If the filesystem signals an error, shutil.move() raises OSError,
+        # which propagates to the caller.  Silent partial-write corruption is
+        # accepted as a very low-probability risk on a trusted NAS.
         return None
 
 
@@ -546,4 +586,5 @@ class MediaRegistry:
         media._dir = new_dir.resolve()
         media._filename = new_name
         media._hash = None  # Invalidate cached hash (path changed)
+        media.__dict__.pop('_effective_target_dir', None)  # Invalidate: depends on _dir
         self._cache[new_path] = media

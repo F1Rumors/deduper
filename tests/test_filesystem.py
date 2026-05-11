@@ -93,6 +93,14 @@ class TestSafeFilename(unittest.TestCase):
         result = safe_filename(self.tmp, "photo.JPG")
         self.assertIn(".JPG", result)
 
+    def test_raises_after_999_attempts(self):
+        """safe_filename must raise RuntimeError when all 999 slots are occupied."""
+        # Fill _001 through _999
+        for i in range(1, 1000):
+            (self.tmp / f"photo_{i:03d}.jpg").touch()
+        with self.assertRaises(RuntimeError):
+            safe_filename(self.tmp, "photo.jpg")
+
 
 class TestWalkMedia(unittest.TestCase):
 

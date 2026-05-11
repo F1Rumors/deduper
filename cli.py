@@ -74,10 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     loc.add_argument("--loadpath", metavar="PATH", help="Source tree for --load")
 
     act = p.add_argument_group("actions (at least one required)")
-    act.add_argument("--load", action="store_true", help="Import media from --loadpath")
-    act.add_argument("--dupes", action="store_true", help="Detect duplicate media")
-    act.add_argument("--validate", action="store_true", help="Detect misplaced media")
-    act.add_argument("--prune", action="store_true", help="Remove empty directories from library trees")
+    act.add_argument("--load", action=argparse.BooleanOptionalAction, help="Import media from --loadpath")
+    act.add_argument("--dupes", action=argparse.BooleanOptionalAction, help="Detect duplicate media")
+    act.add_argument("--validate", action=argparse.BooleanOptionalAction, help="Detect misplaced media")
+    act.add_argument("--prune", action=argparse.BooleanOptionalAction, help="Remove empty directories from library trees")
     act.add_argument(
         "--exif", action="store_true",
         help="Dump raw EXIF metadata for the given paths",

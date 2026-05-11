@@ -11,6 +11,16 @@ headers (e.g. same-camera JPEG files with identical SOI/APP0 markers).
 
 The hash function is MD5 — not cryptographically secure, but fast and
 sufficient for duplicate detection on a trusted local filesystem.
+
+Design note — partial hash false-positive risk (intentional trade-off)
+----------------------------------------------------------------------
+Two files that differ *only* in the regions between the four sample points
+will produce identical hashes and be treated as duplicates.  For a personal
+photo library the probability is negligible: camera-produced files share
+headers/footers but diverge in the image payload, which spans the sampled
+positions.  The trade-off (speed vs. certainty) is accepted.  If this
+ever becomes a concern, a ``--full-hash`` flag that reads the complete file
+for matched pairs before deletion would eliminate false positives entirely.
 """
 
 from __future__ import annotations

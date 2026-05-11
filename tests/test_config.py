@@ -63,9 +63,10 @@ class TestConfigFromDefaults(unittest.TestCase):
 class TestConfigFromArgs(unittest.TestCase):
 
     def _make_args(self, **kwargs):
+        # Action flags default to None (BooleanOptionalAction: not specified on CLI)
         defaults = dict(
             photos=None, videos=None, misdated=None, loadpath=None,
-            load=False, dupes=False, validate=False, prune=False, fix=False, force=False,
+            load=None, dupes=None, validate=None, prune=None, fix=False, force=False,
             parallel=False, debug=False, dryrun=False,
             compareExif=False, exif=False, getDate=False, paths=[],
             config=None, report=None,
@@ -90,6 +91,15 @@ class TestConfigFromArgs(unittest.TestCase):
         cfg = Config.from_args(args)
         self.assertTrue(cfg.debug)
         self.assertTrue(cfg.dryrun)
+
+    def test_fix_overrides_debug_dryrun(self):
+        """--fix must win over --debug's dryrun implication so the user can
+        run 'deduper --debug --fix' to get verbose output while actually
+        performing changes."""
+        args = self._make_args(debug=True, fix=True)
+        cfg = Config.from_args(args)
+        self.assertTrue(cfg.debug)
+        self.assertFalse(cfg.dryrun)
 
     def test_explicit_dryrun(self):
         args = self._make_args(dryrun=True)
@@ -128,6 +138,22 @@ class TestConfigFromArgs(unittest.TestCase):
         args = self._make_args(exclude_dir=["Archive", "Trash"])
         cfg = Config.from_args(args)
         self.assertEqual(cfg.exclude_dirs, frozenset(["Archive", "Trash"]))
+
+    def test_exclude_dir_cli_drops_config_file_dirs(self):
+        """--exclude-dir replaces the config-file value entirely.
+        Dirs set in the config file are silently dropped when CLI overrides.
+        This is documented behaviour: the CLI value takes complete precedence."""
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=".ini", mode="w", delete=False) as f:
+            f.write("[LOCATIONS]\nexclude_dirs = ConfigDir, AnotherDir\n")
+            ini_path = f.name
+        self.addCleanup(__import__("os").unlink, ini_path)
+        args = self._make_args(config=ini_path, exclude_dir=["CLIOnly"])
+        cfg = Config.from_args(args)
+        # CLIOnly is present; config-file dirs are gone
+        self.assertIn("CLIOnly", cfg.exclude_dirs)
+        self.assertNotIn("ConfigDir", cfg.exclude_dirs)
+        self.assertNotIn("AnotherDir", cfg.exclude_dirs)
 
     def test_exclude_re_cli_overrides(self):
         args = self._make_args(exclude_re=r"\.bak$")
@@ -175,6 +201,50 @@ class TestConfigFromArgs(unittest.TestCase):
         args = self._make_args()
         cfg = Config.from_args(args)
         self.assertFalse(cfg.do_prune)
+
+    def test_no_validate_suppresses_config_file_setting(self):
+        """--no-validate (False) must override a config-file validate=true."""
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=".ini", mode="w", delete=False) as f:
+            f.write("[ACTIONS]\nvalidate = true\n")
+            ini_path = f.name
+        self.addCleanup(__import__("os").unlink, ini_path)
+        args = self._make_args(config=ini_path, validate=False)
+        cfg = Config.from_args(args)
+        self.assertFalse(cfg.do_validate)
+
+    def test_no_dupes_suppresses_config_file_setting(self):
+        """--no-dupes (False) must override a config-file dupes=true."""
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=".ini", mode="w", delete=False) as f:
+            f.write("[ACTIONS]\ndupes = true\n")
+            ini_path = f.name
+        self.addCleanup(__import__("os").unlink, ini_path)
+        args = self._make_args(config=ini_path, dupes=False)
+        cfg = Config.from_args(args)
+        self.assertFalse(cfg.do_dupes)
+
+    def test_no_load_suppresses_config_file_setting(self):
+        """--no-load (False) must override a config-file import=true."""
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=".ini", mode="w", delete=False) as f:
+            f.write("[ACTIONS]\nimport = true\n")
+            ini_path = f.name
+        self.addCleanup(__import__("os").unlink, ini_path)
+        args = self._make_args(config=ini_path, load=False)
+        cfg = Config.from_args(args)
+        self.assertFalse(cfg.do_load)
+
+    def test_cli_validate_true_overrides_config_false(self):
+        """--validate (True) must enable validate even if config-file says false."""
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(suffix=".ini", mode="w", delete=False) as f:
+            f.write("[ACTIONS]\nvalidate = false\n")
+            ini_path = f.name
+        self.addCleanup(__import__("os").unlink, ini_path)
+        args = self._make_args(config=ini_path, validate=True)
+        cfg = Config.from_args(args)
+        self.assertTrue(cfg.do_validate)
 
 
 class TestConfigFromFile(unittest.TestCase):

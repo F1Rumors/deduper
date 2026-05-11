@@ -27,7 +27,9 @@ _BAD_FILES_RE = re.compile(_DEFAULT_BAD_FILES_PATTERN, re.IGNORECASE)
 
 # Note: the original list contained '@eaDir$' with a stray regex '$' — this
 # is corrected to the literal directory name '@eaDir'.
-BAD_DIRS: frozenset[str] = frozenset(["@SynoEAStream", "@eaDir", "Misc"])
+# Keep in sync with Config.exclude_dirs — Config is the authoritative default;
+# this constant is only used when walk_media() is called without exclude_dirs.
+BAD_DIRS: frozenset[str] = frozenset(["@SynoEAStream", "@eaDir", "Misc", ".picasaoriginals"])
 
 _SEQ_SUFFIX_RE = re.compile(r"[\-_]+(\d{2,3})\.\w+$")
 _SEQ_STEM_RE = re.compile(r"^(.+?)[\-_]+(\d{2,3})$")

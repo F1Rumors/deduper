@@ -131,6 +131,25 @@ class MediaScanner:
     def report(self) -> Report:
         return self._report
 
+    def _report_phase_timings(self, phase: str, wd: Watchdog) -> None:
+        """Log per-phase timing outliers; debug mode also emits summary stats."""
+        t = wd.timer
+        if t.n == 0:
+            return
+        outliers = t.outliers()
+        if outliers:
+            self._report(
+                f"\n{phase} — {t.n:,d} items, "
+                f"mean {t.mean_ms:.0f}ms, σ={t.stddev_ms:.0f}ms — slow outliers:"
+            )
+            for ms, label in outliers:
+                self._report(f"  {ms:,.0f}ms  {label}")
+        elif self._cfg.debug:
+            self._report(
+                f"\n{phase} — {t.n:,d} items, "
+                f"mean {t.mean_ms:.0f}ms, σ={t.stddev_ms:.0f}ms (no outliers)"
+            )
+
     # ── Entrypoints ────────────────────────────────────────────────────────
 
     def run_load(self) -> None:
@@ -470,6 +489,7 @@ class MediaScanner:
                     wd.disarm()
                 if (i + 1) % 1000 == 0:  # pragma: no cover
                     print(f"\r  Classifying {i + 1:,d}/{n_all:,d}...", end="", flush=True)
+        self._report_phase_timings("Classify", wd)
         n_misplaced = sum(len(v) for v in by_misplaced.values())
         print(f"\r  Classified {n_all:,d} files — {n_misplaced:,d} misplaced")
         sys.stdout.flush()
@@ -603,6 +623,7 @@ class MediaScanner:
                     if done % 1000 == 0:  # pragma: no cover
                         print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
             wd.disarm()
+        self._report_phase_timings("Image EXIF prefetch", wd)
 
         print(f"\r  EXIF pre-fetch complete ({n:,d} images)", flush=True)
 
@@ -647,6 +668,7 @@ class MediaScanner:
                     if done % 500 == 0:  # pragma: no cover
                         print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)
                 wd.disarm()
+            self._report_phase_timings("Video EXIF prefetch", wd)
         finally:
             reader._terminate()
 
@@ -694,6 +716,7 @@ class MediaScanner:
                         if done % 1000 == 0:  # pragma: no cover
                             print(f"\r  Hashed {done:,d}/{n:,d}...", end="", flush=True)
                 wd.disarm()
+            self._report_phase_timings("Hashing (parallel)", wd)
         else:
             with Watchdog(default_timeout=self._cfg.hash_timeout) as wd:
                 for i, mf in enumerate(candidates):
@@ -707,6 +730,7 @@ class MediaScanner:
                         logger.error("Could not hash %s: %s", mf.path, exc)
                     finally:
                         wd.disarm()
+            self._report_phase_timings("Hashing (serial)", wd)
 
         print(f"\r  Hashed {n:,d} files")
         return {k: sorted(v) for k, v in groups.items() if len(v) > 1}

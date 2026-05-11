@@ -12,6 +12,7 @@ import configparser
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -241,6 +242,16 @@ class Config:
         if dt is None:
             return f"0000{sep}00{sep}00"
         return f"{dt.year:04d}{sep}{dt.month:02d}{sep}{dt.day:02d}"
+
+    @cached_property
+    def _resolved_photos_path(self) -> Optional[Path]:
+        """photos_path resolved once so callers skip repeated lstat chains."""
+        return self.photos_path.resolve() if self.photos_path else None
+
+    @cached_property
+    def _resolved_videos_path(self) -> Optional[Path]:
+        """videos_path resolved once so callers skip repeated lstat chains."""
+        return self.videos_path.resolve() if self.videos_path else None
 
     def validate_for_action(self) -> None:
         """Raise ``ValueError`` if the configuration cannot run any action."""

@@ -621,11 +621,18 @@ class MediaScanner:
                         f"image EXIF prefetch — {n_remain} of {n} remaining"
                         f" (last: {path_str})"
                     )
-                    if d is not None:
-                        mf = path_to_mf.get(path_str)
-                        if mf:
-                            mf._dated = d  # Populate cache; skip filename fallback
-                    # else: leave as _UNSET → filename fallback runs on first access
+                    mf = path_to_mf.get(path_str)
+                    if mf:
+                        if d is not None:
+                            mf._dated = d
+                        else:
+                            # No EXIF date from worker — resolve fallback now so
+                            # classify never triggers a second _exif_date() read
+                            # under NAS load after the video prefetch completes.
+                            mf._dated = (
+                                parse_date(mf.filename)
+                                or parse_date(str(mf.path.parent))
+                            )
                     done += 1
                     if done % 1000 == 0:  # pragma: no cover
                         print(f"\r    {done:,d}/{n:,d}...", end="", flush=True)

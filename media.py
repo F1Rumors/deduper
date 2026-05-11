@@ -213,7 +213,8 @@ class MediaFile:
         """
         if not self.dated or not self.default_root:
             return None
-        return (self.default_root / date_to_str(self.dated, self._config.default_sep)).resolve()
+        # default_root is pre-resolved (Config._resolved_*_path); no resolve() needed.
+        return self.default_root / date_to_str(self.dated, self._config.default_sep)
 
     # ── Sorting key (preserves original preference ordering) ──────────────
 
@@ -322,9 +323,13 @@ class MediaFile:
         Both separator conventions (``yyyy/mm/dd`` and ``yyyy-mm-dd``) are
         accepted so that a library originally organised with one format is not
         treated as entirely misplaced when ``default_sep`` changes.
+
+        ``root`` is expected to be pre-resolved (``Config._resolved_*_path``),
+        so no ``.resolve()`` call is needed here — avoiding N lstat chains in
+        the classify hot loop.
         """
         return frozenset(
-            (root / date_to_str(self.dated, sep)).resolve()
+            root / date_to_str(self.dated, sep)
             for sep in ("/", "-")
         )
 
@@ -349,7 +354,7 @@ class MediaFile:
         if not path_date:
             return None
         for sep in ('/', '-'):
-            dated_dir = (root / date_to_str(path_date, sep)).resolve()
+            dated_dir = root / date_to_str(path_date, sep)  # root already resolved
             try:
                 rel = self._dir.relative_to(dated_dir)
                 if rel != Path('.'):
@@ -489,7 +494,7 @@ class ImageFile(MediaFile):
 
     @property
     def default_root(self) -> Optional[Path]:
-        return self._config.photos_path
+        return self._config._resolved_photos_path
 
 
 class VideoFile(MediaFile):
@@ -517,7 +522,7 @@ class VideoFile(MediaFile):
 
     @property
     def default_root(self) -> Optional[Path]:
-        return self._config.videos_path
+        return self._config._resolved_videos_path
 
 
 # ── Registry / factory ─────────────────────────────────────────────────────

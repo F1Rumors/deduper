@@ -37,18 +37,15 @@ logger = logging.getLogger(__name__)
 # ── Parallel worker ────────────────────────────────────────────────────────
 # Must be module-level (not a method) so multiprocessing can pickle it.
 
-def _image_exif_worker(args: tuple[str, int]) -> tuple[str, Optional[date]]:
+def _image_exif_worker(path_str: str) -> tuple[str, Optional[date]]:
     """Read EXIF date from a single image file; returns ``(path_str, date_or_None)``.
 
-    Receives a ``(path_str, size)`` tuple so the already-known file size can
-    be passed to the TIFF late-IFD fast-path without an extra stat call.
     Called in worker processes via ``Pool.imap_unordered``.
     """
-    path_str, size = args
     try:
         from deduper.exif import ImageExifReader
         from pathlib import Path
-        return path_str, ImageExifReader().get_date(Path(path_str), file_size=size)
+        return path_str, ImageExifReader().get_date(Path(path_str))
     except Exception:
         return path_str, None
 
@@ -599,7 +596,7 @@ class MediaScanner:
             f"(pool_size={self._cfg.pool_size}, chunksize={self._cfg.pool_chunksize})...",
             flush=True,
         )
-        args = [(str(mf.path), mf.size) for mf in image_files]
+        args = [str(mf.path) for mf in image_files]
         path_to_mf = {str(mf.path): mf for mf in image_files}
 
         n_remain = n

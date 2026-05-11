@@ -485,7 +485,7 @@ class ImageFile(MediaFile):
         self._exif_reader = exif_reader or ImageExifReader(debug=config.debug)
 
     def _exif_date(self) -> Optional[date]:
-        return self._exif_reader.get_date(self.path, file_size=self._size)
+        return self._exif_reader.get_date(self.path)
 
     @property
     def default_root(self) -> Optional[Path]:

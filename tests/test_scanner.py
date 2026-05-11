@@ -524,7 +524,7 @@ class TestImageExifWorker(unittest.TestCase):
 
     def test_returns_tuple_for_nonexistent_file(self):
         path = "/nonexistent/file.jpg"
-        path_out, d = _image_exif_worker((path, 0))
+        path_out, d = _image_exif_worker(path)
         self.assertEqual(path_out, path)
         self.assertIsNone(d)
 
@@ -534,7 +534,7 @@ class TestImageExifWorker(unittest.TestCase):
             f.write(b"not an image")
             fname = f.name
         self.addCleanup(os.unlink, fname)
-        path_out, d = _image_exif_worker((fname, 12))
+        path_out, d = _image_exif_worker(fname)
         self.assertEqual(path_out, fname)
         self.assertIsNone(d)
 
@@ -556,7 +556,7 @@ class TestImageExifWorker(unittest.TestCase):
         exif[36867] = "2023:08:14 12:00:00"  # DateTimeOriginal
         img.save(fname, exif=exif.tobytes())
 
-        path_out, d = _image_exif_worker((fname, 0))
+        path_out, d = _image_exif_worker(fname)
         self.assertEqual(path_out, fname)
         self.assertEqual(d, date_type(2023, 8, 14))
 
@@ -592,7 +592,7 @@ class TestParallelMode(unittest.TestCase):
         mock_pool_cls.assert_called_once_with(cfg.pool_size)
         imap_args, imap_kwargs = mock_pool.imap_unordered.call_args
         self.assertIs(imap_args[0], _image_exif_worker)
-        self.assertEqual(imap_args[1], [(str(dated_dir / "photo.jpg"), 4)])
+        self.assertEqual(imap_args[1], [str(dated_dir / "photo.jpg")])
         self.assertEqual(imap_kwargs["chunksize"], cfg.pool_chunksize)
 
     def test_serial_mode_does_not_invoke_pool(self):
@@ -636,7 +636,7 @@ class TestImageExifWorkerException(unittest.TestCase):
         """Worker must return (path, None) — not propagate — when ImageExifReader raises."""
         path = "/some/photo.jpg"
         with patch("deduper.exif.ImageExifReader.get_date", side_effect=RuntimeError("boom")):
-            path_out, d = _image_exif_worker((path, 0))
+            path_out, d = _image_exif_worker(path)
         self.assertEqual(path_out, path)
         self.assertIsNone(d)
 

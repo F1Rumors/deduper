@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import atexit
 import logging
-import struct
 from datetime import date
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -158,20 +157,6 @@ class ExifReaderBase:
                 self._recommended.add(k)
 
 
-# ── TIFF late-IFD constants ────────────────────────────────────────────────
-
-# Scanner-written TIFFs write pixel data first (strip 0 at byte 8) then append
-# IFD0 at the very end.  Seeking to IFD0 on a cold 50 MB+ file on a busy NAS
-# can stall for many seconds.  When IFD0 is past 1 MB and past half the file,
-# we skip EXIF and let the caller fall back to the path/filename date.
-# The 1 MB pre-filter avoids the comparison for all normal TIFFs (IFD0 at 8).
-# File size is supplied by the caller (already known from the walk-phase stat)
-# so no additional I/O is needed here.
-_TIFF_LATE_IFD_CHECK_AFTER: int = 1024 * 1024   # skip comparison when IFD0 ≤ 1 MB
-_TIFF_LATE_IFD_MIN_FILE: int   = 512 * 1024     # ignore rule for small files
-_TIFF_LATE_IFD_FRACTION: float = 0.5            # IFD0 past 50 % → skip
-
-
 # ── Pillow backend ─────────────────────────────────────────────────────────
 
 class ImageExifReader(ExifReaderBase):
@@ -180,60 +165,7 @@ class ImageExifReader(ExifReaderBase):
     DATE_FIELDS = IMAGE_DATE_FIELDS
     DATE_FIELDS_IGNORE = IMAGE_DATE_FIELDS_IGNORE
 
-    @staticmethod
-    def _tiff_ifd0_offset(path: Path) -> Optional[int]:
-        """Return the IFD0 byte offset if *path* is a TIFF-structured file, else None.
-
-        Reads only the first 16 bytes — enough for both classic TIFF (8-byte
-        header, 4-byte IFD0 offset) and BigTIFF (16-byte header, 8-byte offset).
-        Returns None for non-TIFF files and on any read error.
-        """
-        try:
-            with open(path, "rb") as f:
-                header = f.read(16)
-            if len(header) < 8:
-                return None
-            bo = header[:2]
-            if bo == b"II":
-                endian = "<"
-            elif bo == b"MM":
-                endian = ">"
-            else:
-                return None
-            magic = struct.unpack(endian + "H", header[2:4])[0]
-            if magic == 42:                          # classic TIFF
-                return struct.unpack(endian + "I", header[4:8])[0]
-            if magic == 43 and len(header) >= 16:   # BigTIFF
-                return struct.unpack(endian + "Q", header[8:16])[0]
-            return None
-        except OSError:
-            return None
-
-    def get_date(self, path: Path, file_size: Optional[int] = None) -> Optional[date]:
-        """Extract the best candidate date from *path*'s EXIF metadata.
-
-        :param file_size: File size in bytes if already known (avoids a stat
-                          inside the TIFF late-IFD check).  Pass ``None`` to
-                          skip the check entirely (safe; just less optimal).
-        """
-        raw = self.get_raw(path, file_size=file_size)
-        return self._date_from_raw(raw, path)
-
-    def get_raw(self, path: Path, file_size: Optional[int] = None) -> dict:
-        # Fast-path for scanner-written TIFFs that place IFD0 at end of file.
-        # Only 8 bytes are read to check; the file_size comes from the caller
-        # (already known from the walk-phase stat) so no extra I/O is needed.
-        if file_size is not None and file_size >= _TIFF_LATE_IFD_MIN_FILE:
-            ifd0 = self._tiff_ifd0_offset(path)
-            if (ifd0 is not None
-                    and ifd0 > _TIFF_LATE_IFD_CHECK_AFTER
-                    and ifd0 > file_size * _TIFF_LATE_IFD_FRACTION):
-                logger.debug(
-                    "Skipping EXIF: TIFF IFD0 at %d/%d bytes (%s)",
-                    ifd0, file_size, path.name,
-                )
-                return {}
-
+    def get_raw(self, path: Path) -> dict:
         try:
             from PIL import Image
             from PIL.ExifTags import TAGS, GPSTAGS

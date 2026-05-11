@@ -532,6 +532,37 @@ class TestExifToolReaderGetDateBatch(unittest.TestCase):
         self.assertEqual(results.get(path_a), date(2020, 1, 1))
         self.assertEqual(results.get(path_b), date(2021, 6, 1))
 
+    def test_chunking_splits_get_metadata_calls(self):
+        """With chunk_size=2 and 5 paths, get_metadata must be called 3 times."""
+        reader = ExifToolReader()
+        reader._tool = MagicMock()
+        reader._tool.get_metadata.return_value = []
+
+        paths = [Path(f"/v/{i}.mp4") for i in range(5)]
+        list(reader.get_date_batch(paths, chunk_size=2))
+
+        self.assertEqual(reader._tool.get_metadata.call_count, 3)
+
+    def test_chunk_exception_yields_none_for_that_chunk_only(self):
+        """An exception in one chunk must not prevent other chunks from yielding."""
+        reader = ExifToolReader()
+        reader._tool = MagicMock()
+
+        good = {"EXIF:DateTimeOriginal": "2023:01:01 00:00:00"}
+        def _side_effect(paths):
+            if len(paths) == 1 and "bad" in paths[0]:
+                raise RuntimeError("boom")
+            return [good] * len(paths)
+
+        reader._tool.get_metadata.side_effect = _side_effect
+
+        paths = [Path("/v/good1.mp4"), Path("/v/bad.mp4"), Path("/v/good2.mp4")]
+        results = dict(reader.get_date_batch(paths, chunk_size=1))
+
+        self.assertEqual(results[Path("/v/good1.mp4")], date(2023, 1, 1))
+        self.assertIsNone(results[Path("/v/bad.mp4")])
+        self.assertEqual(results[Path("/v/good2.mp4")], date(2023, 1, 1))
+
 
 # ── MediaInfoReader ───────────────────────────────────────────────────────
 

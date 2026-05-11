@@ -263,27 +263,40 @@ class ExifToolReader(ExifReaderBase):
             logger.error("Failed to read EXIF via exiftool from %s: %s", path, exc)
             return {}
 
-    def get_date_batch(self, paths: Iterable[Path]) -> Iterator[tuple[Path, Optional[date]]]:
-        """Yield ``(path, date)`` pairs, using exiftool's batch API for speed."""
+    def get_date_batch(
+        self,
+        paths: Iterable[Path],
+        chunk_size: int = 200,
+    ) -> Iterator[tuple[Path, Optional[date]]]:
+        """Yield ``(path, date)`` pairs, using exiftool's batch API for speed.
+
+        Files are submitted in chunks of *chunk_size* so that results start
+        arriving after each chunk rather than only after the entire list is
+        processed.  This keeps external watchdog timers re-armed and provides
+        incremental progress.  ExifTool's persistent subprocess is reused
+        across chunks, so startup overhead is paid only once.
+        """
         self._ensure_started()
         path_list = list(paths)
-        str_paths = [str(p) for p in path_list]
-        try:
-            # ExifToolHelper.get_metadata() accepts a list and returns a list
-            metadata_list = self._tool.get_metadata(str_paths)
-        except Exception as exc:
-            logger.error("Batch EXIF read failed: %s", exc)
-            metadata_list = [{} for _ in path_list]
-        # ExifTool includes a SourceFile key in every result dict; use it to
-        # match each metadata entry back to the correct Path so the pairing is
-        # correct even when ExifTool returns results in a different order than
-        # submitted.  Fall back to zip position when SourceFile is absent.
-        str_to_path = {str(p): p for p in path_list}
-        for path, raw in zip(path_list, metadata_list):
-            raw = raw or {}
-            source = raw.get("SourceFile")
-            matched_path = str_to_path.get(source, path)
-            yield matched_path, self._date_from_raw(raw, matched_path)
+
+        for chunk_start in range(0, len(path_list), chunk_size):
+            chunk = path_list[chunk_start: chunk_start + chunk_size]
+            str_paths = [str(p) for p in chunk]
+            try:
+                metadata_list = self._tool.get_metadata(str_paths)
+            except Exception as exc:
+                logger.error("Batch EXIF read failed (chunk starting at %d): %s", chunk_start, exc)
+                metadata_list = [{} for _ in chunk]
+            # ExifTool includes a SourceFile key in every result dict; use it to
+            # match each metadata entry back to the correct Path so the pairing is
+            # correct even when ExifTool returns results in a different order than
+            # submitted.  Fall back to zip position when SourceFile is absent.
+            str_to_path = {str(p): p for p in chunk}
+            for path, raw in zip(chunk, metadata_list):
+                raw = raw or {}
+                source = raw.get("SourceFile")
+                matched_path = str_to_path.get(source, path)
+                yield matched_path, self._date_from_raw(raw, matched_path)
 
 
 # ── MediaInfo backend ─────────────────────────────────────────────────────

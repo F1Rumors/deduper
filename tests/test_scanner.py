@@ -968,8 +968,8 @@ class TestRunValidateFixLoopContinuesOnError(unittest.TestCase):
 
 # ── Debug summaries ───────────────────────────────────────────────────────
 
-class TestDebugSummaries(unittest.TestCase):
-    """run_dupes, run_validate, and run_load emit summary lines in debug mode."""
+class TestVerboseSummaries(unittest.TestCase):
+    """run_dupes, run_validate, and run_load emit summary lines in verbose mode."""
 
     def setUp(self):
         stack = contextlib.ExitStack()
@@ -980,8 +980,8 @@ class TestDebugSummaries(unittest.TestCase):
 
     # ── run_dupes ──────────────────────────────────────────────────────────
 
-    def test_dupes_debug_summary_dryrun(self):
-        """In debug (dryrun) mode, a summary line mentioning 'not removed' appears."""
+    def test_dupes_verbose_summary_dryrun(self):
+        """In verbose (dryrun) mode, a summary line mentioning 'not removed' appears."""
         d = self.photos / "2023" / "08" / "14"
         d.mkdir(parents=True)
         data = b"same" * 200
@@ -989,14 +989,14 @@ class TestDebugSummaries(unittest.TestCase):
         (d / "b.jpg").write_bytes(data)
 
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_dupes=True, debug=True, dryrun=True)
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True, verbose=True, dryrun=True)
         MediaScanner(config=cfg, report=report).run_dupes()
         text = report.render()
         self.assertIn("Dupes summary", text)
         self.assertIn("not removed", text)
 
-    def test_dupes_debug_summary_fix(self):
-        """In debug+fix mode, the summary reports actual removal counts."""
+    def test_dupes_verbose_summary_fix(self):
+        """In verbose+fix mode, the summary reports actual removal counts."""
         d = self.photos / "2023" / "08" / "14"
         d.mkdir(parents=True)
         data = b"same" * 200
@@ -1004,15 +1004,15 @@ class TestDebugSummaries(unittest.TestCase):
         (d / "b.jpg").write_bytes(data)
 
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_dupes=True, debug=True, dryrun=False)
+        cfg = make_cfg(photos_path=self.photos, do_dupes=True, verbose=True, dryrun=False)
         MediaScanner(config=cfg, report=report).run_dupes()
         text = report.render()
         self.assertIn("Dupes summary", text)
         self.assertIn("removed", text)
         self.assertNotIn("not removed", text)
 
-    def test_dupes_no_debug_no_summary(self):
-        """Without --debug, no 'Dupes summary' line appears."""
+    def test_dupes_no_verbose_no_summary(self):
+        """Without --verbose, no 'Dupes summary' line appears."""
         d = self.photos / "2023" / "08" / "14"
         d.mkdir(parents=True)
         data = b"same" * 200
@@ -1026,14 +1026,14 @@ class TestDebugSummaries(unittest.TestCase):
 
     # ── run_validate ───────────────────────────────────────────────────────
 
-    def test_validate_debug_expected_outcomes(self):
-        """In debug mode, expected fix outcomes appear before any actual fix."""
+    def test_validate_verbose_expected_outcomes(self):
+        """In verbose mode, expected fix outcomes appear before any actual fix."""
         wrong = self.photos / "2020" / "01" / "01"
         wrong.mkdir(parents=True)
         (wrong / "IMG_2023-08-14.jpg").write_bytes(b"x" * 50)
 
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True, dryrun=True)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, verbose=True, dryrun=True)
         MediaScanner(config=cfg, report=report).run_validate()
         self.assertIn("Expected fix outcomes", report.render())
         self.assertIn("would relocate", report.render())
@@ -1049,7 +1049,7 @@ class TestDebugSummaries(unittest.TestCase):
         (correct / "IMG_2023-08-14.jpg").write_bytes(data)
 
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True, dryrun=True)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, verbose=True, dryrun=True)
         MediaScanner(config=cfg, report=report).run_validate()
         self.assertIn("would remove as duplicate", report.render())
 
@@ -1089,8 +1089,8 @@ class TestDebugSummaries(unittest.TestCase):
 
     # ── run_load ───────────────────────────────────────────────────────────
 
-    def test_load_debug_summary(self):
-        """In debug mode, run_load emits a load summary line."""
+    def test_load_verbose_summary(self):
+        """In verbose mode, run_load emits a load summary line."""
         inbox  = self.tmp / "inbox"
         inbox.mkdir()
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
@@ -1101,14 +1101,14 @@ class TestDebugSummaries(unittest.TestCase):
             photos_path=self.photos,
             do_load=True,
             dryrun=False,
-            debug=True,
+            verbose=True,
         )
         MediaScanner(config=cfg, report=report).run_load()
         self.assertIn("Load summary", report.render())
         self.assertIn("imported", report.render())
 
-    def test_load_no_debug_no_summary(self):
-        """Without --debug, no 'Load summary' line appears."""
+    def test_load_no_verbose_no_summary(self):
+        """Without --verbose, no 'Load summary' line appears."""
         inbox = self.tmp / "inbox"
         inbox.mkdir()
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
@@ -1122,8 +1122,8 @@ class TestDebugSummaries(unittest.TestCase):
         MediaScanner(config=cfg, report=report).run_load()
         self.assertNotIn("Load summary", report.render())
 
-    def test_debug_reports_unrecognised_extensions(self):
-        """In debug mode, a summary of ignored unknown extensions appears in the report."""
+    def test_verbose_reports_unrecognised_extensions(self):
+        """In verbose mode, a summary of ignored unknown extensions appears in the report."""
         inbox = self.tmp / "inbox"
         inbox.mkdir()
         (inbox / "document.docx").write_bytes(b"x")
@@ -1131,7 +1131,7 @@ class TestDebugSummaries(unittest.TestCase):
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
         report = Report()
         cfg = make_cfg(import_path=inbox, photos_path=self.photos,
-                       do_load=True, debug=True)
+                       do_load=True, verbose=True)
         MediaScanner(config=cfg, report=report).run_load()
         text = report.render()
         self.assertIn("Ignored files with unrecognised extensions", text)
@@ -1148,12 +1148,12 @@ class TestDebugSummaries(unittest.TestCase):
         (inbox / "IMG_2023-08-14.jpg").write_bytes(b"photo")
         report = Report()
         cfg = make_cfg(import_path=inbox, photos_path=self.photos,
-                       do_load=True, debug=True)
+                       do_load=True, verbose=True)
         MediaScanner(config=cfg, report=report).run_load()
         self.assertNotIn("Ignored files with unrecognised extensions", report.render())
 
-    def test_unrecognised_extensions_not_reported_without_debug(self):
-        """Without --debug, no ignored-extensions line should appear."""
+    def test_unrecognised_extensions_not_reported_without_verbose(self):
+        """Without --verbose, no ignored-extensions line should appear."""
         inbox = self.tmp / "inbox"
         inbox.mkdir()
         (inbox / "document.docx").write_bytes(b"x")
@@ -1339,7 +1339,7 @@ class TestCountExpectedOutcomes(unittest.TestCase):
 
 # ── Debug expected-outcome display: overflow and skip ─────────────────────
 
-class TestDebugExpectedOutcomesDisplay(unittest.TestCase):
+class TestVerboseExpectedOutcomesDisplay(unittest.TestCase):
 
     def setUp(self):
         stack = contextlib.ExitStack()
@@ -1356,7 +1356,7 @@ class TestDebugExpectedOutcomesDisplay(unittest.TestCase):
         (wrong   / "IMG_2023-08-14.jpg").write_bytes(content_a)
         (correct / "IMG_2023-08-14.jpg").write_bytes(content_b)
 
-    def test_debug_shows_overflow_count(self):
+    def test_verbose_shows_overflow_count(self):
         """When misdated_path is set and a collision exists, overflow count appears."""
         overflow = self.tmp / "overflow"
         overflow.mkdir()
@@ -1364,16 +1364,16 @@ class TestDebugExpectedOutcomesDisplay(unittest.TestCase):
         report = Report()
         cfg = make_cfg(
             photos_path=self.photos, do_validate=True,
-            debug=True, misdated_path=overflow,
+            verbose=True, misdated_path=overflow,
         )
         MediaScanner(config=cfg, report=report).run_validate()
         self.assertIn("would send to overflow dir", report.render())
 
-    def test_debug_shows_skip_count(self):
+    def test_verbose_shows_skip_count(self):
         """When no misdated_path and a collision exists, skip count appears."""
         self._place_collision()
         report = Report()
-        cfg = make_cfg(photos_path=self.photos, do_validate=True, debug=True)
+        cfg = make_cfg(photos_path=self.photos, do_validate=True, verbose=True)
         MediaScanner(config=cfg, report=report).run_validate()
         self.assertIn("would skip", report.render())
 

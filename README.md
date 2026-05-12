@@ -69,10 +69,9 @@ misdated = /mnt/nas/misc
 import   = /inbox
 
 [GLOBALS]
-DEFAULT_SEP   = /       ; Use yyyy/mm/dd directories (default).  Set to - for yyyy-mm-dd.
-DRYRUN        = false
-DEBUG         = false
-POOL_SIZE     = 4       ; Worker processes for parallel scan
+DEFAULT_SEP    = /       ; Use yyyy/mm/dd directories (default).  Set to - for yyyy-mm-dd.
+VERBOSE        = false
+POOL_SIZE      = 4       ; Worker processes for parallel scan
 POOL_CHUNKSIZE = 20
 
 [ACTIONS]
@@ -145,9 +144,10 @@ the destination:
 
 ```
 usage: deduper [-h] [--photos PATH] [--videos PATH] [--misdated PATH]
-               [--loadpath PATH] [--load] [--dupes] [--validate]
+               [--loadpath PATH] [--load] [--no-load] [--dupes] [--no-dupes]
+               [--validate] [--no-validate] [--prune] [--no-prune]
                [--exif] [--getDate] [--fix] [--force] [--parallel]
-               [--debug] [--dryrun] [--compareExif] [--config PATH]
+               [--verbose] [--compareExif] [--config PATH]
                [--report EMAIL] [--exiftool PATH]
                [--exclude-dir NAME] [--exclude-re PATTERN]
                [PATH ...]
@@ -156,12 +156,13 @@ locations:
   --photos PATH     Root for dated images
   --videos PATH     Root for dated videos
   --misdated PATH   Overflow directory for name-clash relocations
-  --loadpath PATH   Source tree for --load
+  --loadpath PATH   Source tree for --load (also implies --load)
 
-actions:
+actions (at least one required):
   --load            Import media from --loadpath
   --dupes           Detect duplicate media
   --validate        Detect misplaced media
+  --prune           Remove empty directories from library trees
 
 diagnostic (supply file paths as positional arguments):
   --exif            Dump raw ExifTool metadata for given paths
@@ -174,8 +175,7 @@ options:
   --force           Rename files on collision rather than skipping
   --parallel        Scan in parallel; prefetches image EXIF via Pool and
                     video EXIF via ExifTool batch mode
-  --debug           Enable verbose logging (implies --dryrun)
-  --dryrun          Simulate without making changes
+  --verbose         Enable verbose logging
   --config PATH     INI config file
   --report EMAIL    Email the report (future enhancement)
   --exiftool PATH   Full path to the exiftool binary (default: search PATH)
@@ -198,6 +198,7 @@ deduper/
 ├── hashing.py      Partial file hashing for duplicate detection
 ├── media.py        MediaFile, ImageFile, VideoFile, MediaRegistry
 ├── scanner.py      MediaScanner orchestration; Report accumulator
+├── watchdog.py     Per-file timeout watchdog (hard-exits on NAS hangs)
 └── tests/
     ├── test_cli.py
     ├── test_config.py
@@ -206,22 +207,23 @@ deduper/
     ├── test_filesystem.py
     ├── test_hashing.py
     ├── test_media.py
-    └── test_scanner.py
+    ├── test_scanner.py
+    └── test_watchdog.py
 ```
 
 ---
 
 ## Running the tests
 
-No external test runner is required — the standard library `unittest` is used
-throughout.
-
 ```bash
 # Run all tests
-python -m unittest discover -s deduper/tests -p "test_*.py" -v
+python -m pytest deduper/tests/ -q
+
+# Run with coverage
+python -m pytest deduper/tests/ --cov=deduper --cov-report=term-missing -q
 
 # Run a single module
-python -m unittest deduper.tests.test_dates -v
+python -m pytest deduper/tests/test_dates.py -v
 ```
 
 ---

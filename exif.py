@@ -122,8 +122,8 @@ class ExifReaderBase:
     DATE_FIELDS: list[str] = []
     DATE_FIELDS_IGNORE: frozenset[str] = frozenset()
 
-    def __init__(self, debug: bool = False) -> None:
-        self._debug = debug
+    def __init__(self, verbose: bool = False) -> None:
+        self._verbose = verbose
         self._recommended: set[str] = set()
 
     def get_raw(self, path: Path) -> dict:
@@ -141,7 +141,7 @@ class ExifReaderBase:
                 d = parse_date(str(raw[field]))
                 if d:
                     return d
-        if self._debug and path:
+        if self._verbose and path:
             self._log_candidates(raw, path)
         return None
 
@@ -218,8 +218,8 @@ class ExifToolReader(ExifReaderBase):
     DATE_FIELDS = EXIFTOOL_DATE_FIELDS
     DATE_FIELDS_IGNORE = EXIFTOOL_DATE_FIELDS_IGNORE
 
-    def __init__(self, debug: bool = False, executable: Optional[str] = None) -> None:
-        super().__init__(debug)
+    def __init__(self, verbose: bool = False, executable: Optional[str] = None) -> None:
+        super().__init__(verbose)
         self._tool = None
         self._executable = executable  # None → ExifToolHelper uses shutil.which
 

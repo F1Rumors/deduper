@@ -40,8 +40,8 @@ class Config:
     do_compare_exif: bool = False  # Report EXIF differences between backends
 
     # ── Behaviour flags ────────────────────────────────────────────────────
-    debug: bool = False
-    dryrun: bool = True          # False only when --fix is explicitly passed
+    verbose: bool = False
+    dryrun: bool = True          # always True unless --fix is given
     parallel: bool = False
 
     # ── Parallelism ────────────────────────────────────────────────────────
@@ -110,17 +110,10 @@ class Config:
         if args.loadpath:
             cfg.import_path = Path(args.loadpath)
 
-        # Debug/dryrun — command line only (config file variant applied above)
-        if args.debug:
-            cfg.debug = True
-            cfg.dryrun = True  # safe default for debug without --fix
+        if args.verbose:
+            cfg.verbose = True
             logging.getLogger().setLevel(logging.DEBUG)
             logging.getLogger("PIL").setLevel(logging.INFO)
-        if args.dryrun:
-            cfg.dryrun = True
-        # --fix is applied last so it wins over --debug and config-file DRYRUN.
-        # This lets you run "deduper --debug --fix" to get verbose output while
-        # actually performing changes.
         if args.fix:
             cfg.dryrun = False
 
@@ -194,10 +187,8 @@ class Config:
 
         if "GLOBALS" in parser:
             g = parser["GLOBALS"]
-            if "DEBUG" in g:
-                self.debug = g.getboolean("DEBUG")
-            if "DRYRUN" in g:
-                self.dryrun = g.getboolean("DRYRUN")
+            if "VERBOSE" in g:
+                self.verbose = g.getboolean("VERBOSE")
             if "DEFAULT_SEP" in g:
                 self.default_sep = g["DEFAULT_SEP"]
             if "POOL_SIZE" in g:
@@ -253,12 +244,25 @@ class Config:
         """videos_path resolved once so callers skip repeated lstat chains."""
         return self.videos_path.resolve() if self.videos_path else None
 
+    # Matches a trailing date in a path: either YYYY/MM/DD (three separate
+    # directory components) or YYYY-MM-DD (single component with hyphens).
+    # Also catches calendar-invalid values like 0000/00/00 that parse_date skips.
+    _DATED_SUFFIX_RE = re.compile(
+        r"[\\/](?:\d{4}[\\/]\d{2}[\\/]\d{2}|\d{4}-\d{2}-\d{2})$"
+    )
+
     def validate_for_action(self) -> None:
         """Raise ``ValueError`` if the configuration cannot run any action."""
         if not (self.do_load or self.do_dupes or self.do_validate or self.do_prune or self.diagnostic_paths):
             raise ValueError(
                 "No action specified. Use --load, --dupes, --validate, or supply file paths."
             )
+        for flag, path in [("--photos", self.photos_path), ("--videos", self.videos_path)]:
+            if path and self._DATED_SUFFIX_RE.search(str(path)):
+                raise ValueError(
+                    f"{flag} {str(path)!r} ends in a date directory (YYYY/MM/DD); "
+                    f"provide the library root instead"
+                )
         # Overlap check is scoped to do_load intentionally: validate/dupes only
         # scan photos_path / videos_path (not import_path), so a misconfigured
         # import_path that sits inside the library is harmless for those actions.

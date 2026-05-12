@@ -16,7 +16,6 @@ import argparse
 import logging
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from pprint import pprint
 from typing import Optional, Sequence
@@ -28,30 +27,6 @@ from .scanner import MediaScanner, Report
 
 logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-
-
-class _Tee:
-    """Write every line to both the original stdout and a log file."""
-
-    def __init__(self, log_path: Path) -> None:
-        self._fh = log_path.open("w", encoding="utf-8")
-        self._orig = sys.stdout
-        sys.stdout = self
-
-    def write(self, data: str) -> int:
-        self._orig.write(data)
-        return self._fh.write(data)
-
-    def flush(self) -> None:
-        self._orig.flush()
-        self._fh.flush()
-
-    def fileno(self) -> int:
-        return self._orig.fileno()
-
-    def close(self) -> None:
-        sys.stdout = self._orig
-        self._fh.close()
 
 
 # ── Argument parser ────────────────────────────────────────────────────────
@@ -105,10 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     opt.add_argument("--parallel", action="store_true", help="Scan in parallel")
     opt.add_argument(
-        "--debug", action="store_true",
-        help="Enable verbose logging and imply --dryrun",
+        "--verbose", action="store_true",
+        help="Enable verbose logging",
     )
-    opt.add_argument("--dryrun", action="store_true", help="Simulate without changes")
     opt.add_argument(
         "--compareExif", action="store_true",
         help="Report files where Pillow and ExifTool disagree on date",
@@ -133,10 +107,6 @@ def build_parser() -> argparse.ArgumentParser:
             "When given, replaces the default pattern entirely."
         ),
     )
-    opt.add_argument(
-        "--stdout", action="store_true",
-        help="Write output to stdout only — suppress the automatic log file",
-    )
     return p
 
 
@@ -144,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_exif(paths: list[Path], config: Config) -> None:
     """Print raw ExifTool metadata for each path."""
-    with ExifToolReader(debug=config.debug, executable=config.exiftool_executable) as reader:
+    with ExifToolReader(verbose=config.verbose, executable=config.exiftool_executable) as reader:
         for path in paths:
             if not path.exists():
                 print(f"{path}: file not found")
@@ -157,8 +127,8 @@ def cmd_compare_exif(paths: list[Path], config: Config) -> None:
     """Report files where Pillow and ExifTool report different dates."""
     from .exif import ImageExifReader
 
-    img_reader = ImageExifReader(debug=config.debug)
-    with ExifToolReader(debug=config.debug, executable=config.exiftool_executable) as et_reader:
+    img_reader = ImageExifReader(verbose=config.verbose)
+    with ExifToolReader(verbose=config.verbose, executable=config.exiftool_executable) as et_reader:
         for path in paths:
             if not path.exists():
                 print(f"{path}: file not found")
@@ -181,7 +151,7 @@ def cmd_get_date(paths: list[Path], config: Config) -> None:
     from .dates import parse_date
     from .media import MediaRegistry, ImageFile, VideoFile
 
-    img_reader = ImageExifReader(debug=config.debug)
+    img_reader = ImageExifReader(verbose=config.verbose)
     registry = MediaRegistry(config)
 
     for path in paths:
@@ -203,7 +173,7 @@ def cmd_get_date(paths: list[Path], config: Config) -> None:
             exif_date = img_reader.get_date(path)
         else:
             # VideoFile — use ExifToolReader (lazy, one file at a time)
-            with ExifToolReader(debug=config.debug, executable=config.exiftool_executable) as et:
+            with ExifToolReader(verbose=config.verbose, executable=config.exiftool_executable) as et:
                 exif_date = et.get_date(path)
 
         # Filename date — parse just the bare filename
@@ -230,21 +200,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    tee: Optional[_Tee] = None
-    if not args.stdout:
-        log_path = Path.cwd() / f"dedupe.{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}.log"
-        tee = _Tee(log_path)
-        print(f"Logging to {log_path}", file=tee._orig)
-
-    try:
-        return _run(args, config, parser)
-    finally:
-        if tee:
-            tee.close()
+    return _run(args, config, parser)
 
 
 def _run(args, config, parser) -> int:
-    """Inner body of main() — separated so the tee finally-block stays clean."""
     start = time.monotonic()
 
     # ── Diagnostic mode (paths supplied — exits early) ─────────────────────

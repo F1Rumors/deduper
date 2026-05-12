@@ -26,7 +26,7 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertFalse(cfg.do_dupes)
         self.assertFalse(cfg.do_validate)
         self.assertFalse(cfg.do_force)
-        self.assertFalse(cfg.debug)
+        self.assertFalse(cfg.verbose)
         self.assertTrue(cfg.dryrun)
         self.assertFalse(cfg.parallel)
         self.assertEqual(cfg.pool_size, 4)
@@ -50,8 +50,8 @@ class TestConfigExcludeDirsDefaults(unittest.TestCase):
 class TestConfigFromDefaults(unittest.TestCase):
 
     def test_override_single_field(self):
-        cfg = Config.from_defaults(debug=True, dryrun=True)
-        self.assertTrue(cfg.debug)
+        cfg = Config.from_defaults(verbose=True, dryrun=True)
+        self.assertTrue(cfg.verbose)
         self.assertTrue(cfg.dryrun)
 
     def test_override_paths(self):
@@ -67,7 +67,7 @@ class TestConfigFromArgs(unittest.TestCase):
         defaults = dict(
             photos=None, videos=None, misdated=None, loadpath=None,
             load=None, dupes=None, validate=None, prune=None, fix=False, force=False,
-            parallel=False, debug=False, dryrun=False,
+            parallel=False, verbose=False,
             compareExif=False, exif=False, getDate=False, paths=[],
             config=None, report=None,
             exclude_dir=None, exclude_re=None, exiftool=None,
@@ -86,26 +86,17 @@ class TestConfigFromArgs(unittest.TestCase):
         self.assertTrue(cfg.do_load)
         self.assertEqual(cfg.import_path, Path("/import"))
 
-    def test_debug_implies_dryrun(self):
-        args = self._make_args(debug=True)
+    def test_verbose_independent_of_dryrun(self):
+        args = self._make_args(verbose=True)
         cfg = Config.from_args(args)
-        self.assertTrue(cfg.debug)
-        self.assertTrue(cfg.dryrun)
+        self.assertTrue(cfg.verbose)
+        self.assertTrue(cfg.dryrun)  # dryrun default unchanged
 
-    def test_fix_overrides_debug_dryrun(self):
-        """--fix must win over --debug's dryrun implication so the user can
-        run 'deduper --debug --fix' to get verbose output while actually
-        performing changes."""
-        args = self._make_args(debug=True, fix=True)
+    def test_verbose_with_fix_runs(self):
+        args = self._make_args(verbose=True, fix=True)
         cfg = Config.from_args(args)
-        self.assertTrue(cfg.debug)
+        self.assertTrue(cfg.verbose)
         self.assertFalse(cfg.dryrun)
-
-    def test_explicit_dryrun(self):
-        args = self._make_args(dryrun=True)
-        cfg = Config.from_args(args)
-        self.assertTrue(cfg.dryrun)
-        self.assertFalse(cfg.debug)
 
     def test_location_paths_converted(self):
         args = self._make_args(photos="/p", videos="/v", misdated="/m")
@@ -277,19 +268,30 @@ import = /mnt/import
     def test_globals_loaded(self):
         ini = self._write_ini("""
 [GLOBALS]
-DEBUG = true
-DRYRUN = false
+VERBOSE = true
 DEFAULT_SEP = -
 POOL_SIZE = 4
 POOL_CHUNKSIZE = 20
 """)
         cfg = Config()
         cfg._apply_config_file(ini)
-        self.assertTrue(cfg.debug)
-        self.assertFalse(cfg.dryrun)
+        self.assertTrue(cfg.verbose)
         self.assertEqual(cfg.default_sep, "-")
         self.assertEqual(cfg.pool_size, 4)
         self.assertEqual(cfg.pool_chunksize, 20)
+
+    def test_watchdog_globals_loaded(self):
+        ini = self._write_ini("""
+[GLOBALS]
+hash_timeout = 30.0
+slow_extensions = tif, tiff, .cr2
+slow_ext_timeout = 240.0
+""")
+        cfg = Config()
+        cfg._apply_config_file(ini)
+        self.assertEqual(cfg.hash_timeout, 30.0)
+        self.assertEqual(cfg.slow_extensions, frozenset({"tif", "tiff", "cr2"}))
+        self.assertEqual(cfg.slow_ext_timeout, 240.0)
 
     def test_actions_loaded(self):
         ini = self._write_ini("""
@@ -428,6 +430,29 @@ class TestConfigValidateForAction(unittest.TestCase):
 
     def test_prune_action_ok(self):
         cfg = Config(do_prune=True)
+        cfg.validate_for_action()  # Must not raise
+
+    def test_photos_path_dated_suffix_raises(self):
+        """photos_path ending in YYYY/MM/DD must be rejected — it is a dated subdir."""
+        cfg = Config(do_validate=True, photos_path=Path("/photos/2015/11/25"))
+        with self.assertRaises(ValueError, msg="--photos"):
+            cfg.validate_for_action()
+
+    def test_videos_path_dated_suffix_raises(self):
+        """videos_path ending in YYYY/MM/DD must be rejected."""
+        cfg = Config(do_validate=True, videos_path=Path("/videos/0000/00/00"))
+        with self.assertRaises(ValueError, msg="--videos"):
+            cfg.validate_for_action()
+
+    def test_photos_path_dated_hyphen_suffix_raises(self):
+        """Hyphen-separated YYYY-MM-DD suffix must also be rejected."""
+        cfg = Config(do_validate=True, photos_path=Path("/photos/2023-08-14"))
+        with self.assertRaises(ValueError, msg="--photos"):
+            cfg.validate_for_action()
+
+    def test_library_root_without_date_suffix_ok(self):
+        """A normal library root must pass validation."""
+        cfg = Config(do_validate=True, photos_path=Path("/photos/by date"))
         cfg.validate_for_action()  # Must not raise
 
 

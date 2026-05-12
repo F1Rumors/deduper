@@ -862,7 +862,7 @@ class TestMediaFileSpecialMethods(unittest.TestCase):
         (wrong_dir / "photo.jpg").write_bytes(b"x")
         reader = MagicMock()
         reader.get_date.return_value = date(2023, 8, 14)
-        cfg = make_cfg(debug=True)
+        cfg = make_cfg(verbose=True)
         mf = ImageFile(wrong_dir, "photo.jpg", cfg, exif_reader=reader)
         # Force dated to be computed so _dated is not _UNSET
         _ = mf.dated

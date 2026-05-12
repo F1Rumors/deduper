@@ -249,7 +249,7 @@ class MediaFile:
 
     def __repr__(self) -> str:
         parts = [str(self.path)]
-        if self._config.debug and self._dated is not _UNSET and self.misdated:
+        if self._config.verbose and self._dated is not _UNSET and self.misdated:
             parts.append(date_to_str(self.dated, self._config.default_sep))
         if self._deleted:
             parts.append("DELETED")
@@ -487,7 +487,7 @@ class ImageFile(MediaFile):
         exif_reader: Optional[ImageExifReader] = None,
     ) -> None:
         super().__init__(directory, filename, config)
-        self._exif_reader = exif_reader or ImageExifReader(debug=config.debug)
+        self._exif_reader = exif_reader or ImageExifReader(verbose=config.verbose)
 
     def _exif_date(self) -> Optional[date]:
         return self._exif_reader.get_date(self.path)
@@ -511,7 +511,7 @@ class VideoFile(MediaFile):
         mediainfo_reader: Optional[MediaInfoReader] = None,
     ) -> None:
         super().__init__(directory, filename, config)
-        self._exif_reader = exif_reader or ExifToolReader(debug=config.debug)
+        self._exif_reader = exif_reader or ExifToolReader(verbose=config.verbose)
         self._mediainfo_reader = mediainfo_reader  # None → MediaInfo not used
 
     def _exif_date(self) -> Optional[date]:
@@ -537,8 +537,8 @@ class MediaRegistry:
     def __init__(self, config: Config) -> None:
         self._config = config
         self._cache: dict[Path, Optional[MediaFile]] = {}
-        self._image_reader = ImageExifReader(debug=config.debug)
-        self._video_reader = ExifToolReader(debug=config.debug, executable=config.exiftool_executable)
+        self._image_reader = ImageExifReader(verbose=config.verbose)
+        self._video_reader = ExifToolReader(verbose=config.verbose, executable=config.exiftool_executable)
         self._mediainfo_reader = MediaInfoReader() if MediaInfoReader.available() else None
         if self._mediainfo_reader:
             logger.debug("MediaInfo available — will use as video fallback")

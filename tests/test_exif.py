@@ -35,8 +35,8 @@ class StubReader(ExifReaderBase):
     DATE_FIELDS = ["FieldA", "FieldB", "FieldC"]
     DATE_FIELDS_IGNORE = frozenset(["IgnoredField"])
 
-    def __init__(self, raw: dict, debug: bool = False) -> None:
-        super().__init__(debug=debug)
+    def __init__(self, raw: dict, verbose: bool = False) -> None:
+        super().__init__(verbose=verbose)
         self._raw = raw
 
     def get_raw(self, path: Path) -> dict:
@@ -84,12 +84,12 @@ class TestExifReaderBase(unittest.TestCase):
         reader = StubReader({"FieldA": "2023-13-01"})  # month 13
         self.assertIsNone(reader.get_date(Path("x")))
 
-    def test_debug_logs_candidate_fields(self):
-        """In debug mode, fields not in DATE_FIELDS that contain a date are
+    def test_verbose_logs_candidate_fields(self):
+        """In verbose mode, fields not in DATE_FIELDS that contain a date are
         logged (but not returned unless also in DATE_FIELDS)."""
         reader = StubReader(
             {"UnknownField": "2022-07-04", "FieldA": ""},
-            debug=True,
+            verbose=True,
         )
         with patch("deduper.exif.logger") as mock_log:
             reader.get_date(Path("f"))
@@ -98,8 +98,8 @@ class TestExifReaderBase(unittest.TestCase):
         all_args = [a for c in mock_log.debug.call_args_list for a in c[0]]
         self.assertTrue(any("UnknownField" in str(a) for a in all_args))
 
-    def test_debug_candidate_only_logged_once(self):
-        reader = StubReader({"UnknownField": "2022-07-04"}, debug=True)
+    def test_verbose_candidate_only_logged_once(self):
+        reader = StubReader({"UnknownField": "2022-07-04"}, verbose=True)
         with patch("deduper.exif.logger"):
             reader.get_date(Path("f"))
             reader.get_date(Path("f"))  # Second call — should not re-log
@@ -207,7 +207,7 @@ class TestExifToolReaderWithStub(unittest.TestCase):
     """Tests for ExifToolReader using a patched _tool attribute."""
 
     def _make_reader_with_raw(self, raw: dict) -> ExifToolReader:
-        reader = ExifToolReader(debug=False)
+        reader = ExifToolReader(verbose=False)
         reader._tool = MagicMock()
         # ExifToolHelper.get_metadata() returns a list of dicts (one per file)
         reader._tool.get_metadata.return_value = [raw]
@@ -223,7 +223,7 @@ class TestExifToolReaderWithStub(unittest.TestCase):
         self.assertIsNone(reader.get_date(Path("movie.mp4")))
 
     def test_get_raw_handles_exception(self):
-        reader = ExifToolReader(debug=False)
+        reader = ExifToolReader(verbose=False)
         reader._tool = MagicMock()
         reader._tool.get_metadata.side_effect = ValueError("boom")
         result = reader.get_raw(Path("x.mp4"))

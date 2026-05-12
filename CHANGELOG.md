@@ -7,6 +7,32 @@ All meaningful changes to the deduper codebase since the initial refactor from
 
 ## [Unreleased] — ongoing improvements
 
+### Changed — parameter cleanup and simplification
+- Renamed `--debug` to `--verbose` throughout (Config field, CLI flag, INI key,
+  ExifReader constructor parameter `debug=` → `verbose=`).
+- Removed `--dryrun` flag and `DRYRUN` INI key.  Dry-run is now unconditionally
+  the default; `--fix` is the only way to enable writes.  The `Config.dryrun`
+  field remains (used internally by scanner/media) and is always `True` unless
+  `--fix` is given.
+- Removed `--verbose` implication of `--dryrun` (the two are now independent).
+- Removed `_Tee` class and `--stdout` flag; output goes to stdout only and
+  callers can use shell redirection (`deduper ... > run.log`).
+- Added startup validation: `--photos`/`--videos` paths ending in a
+  `YYYY/MM/DD` or `YYYY-MM-DD` date component are rejected with a clear error
+  message (prevents accidentally using a dated subdirectory as the library root).
+
+### Fixed — classify watchdog timeout on NAS under load
+- `config.py`: added `_resolved_photos_path` / `_resolved_videos_path`
+  `cached_property` accessors; `photos_path` and `videos_path` are now resolved
+  once at startup instead of per file per classify call.
+- `media.py`: removed `.resolve()` calls from `_valid_directories()`,
+  `_normalised_directory`, and `_subdir_below_date()` — the root is already
+  resolved via `Config._resolved_*_path`, eliminating ~28 lstat/readlink
+  syscalls per file in the hot classify loop.
+- `scanner.py`: when `_prefetch_image_dates()` worker returns `None` (no EXIF
+  date), the filename/path fallback date is now computed and cached immediately
+  so the classify loop never triggers a second Pillow read under NAS load.
+
 ### Added — MediaInfo fallback for video dating
 - `exif.py`: new `MediaInfoReader` class using `mediainfo --Output=JSON`.
   Tries `Encoded_Date`, `Tagged_Date`, `Mastered_Date`, `File_Modified_Date`

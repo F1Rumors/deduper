@@ -142,7 +142,7 @@ class MediaScanner:
             )
             for ms, label in outliers:
                 self._report(f"  {ms:,.0f}ms  {label}")
-        elif self._cfg.debug:
+        elif self._cfg.verbose:
             self._report(
                 f"\n{phase} — {t.n:,d} items, "
                 f"mean {t.mean_ms:.0f}ms, σ={t.stddev_ms:.0f}ms (no outliers)"
@@ -168,7 +168,7 @@ class MediaScanner:
                     n_errors += 1
                 else:
                     n_imported += 1
-        if self._cfg.debug:
+        if self._cfg.verbose:
             self._report(
                 f"\nLoad summary: {n_imported:,d} imported, {n_errors:,d} error(s)/skipped"
             )
@@ -295,7 +295,7 @@ class MediaScanner:
                 self._report(f"    should be: {expected}")
 
         # ── Debug: expected fix outcomes (computed without touching disk) ────
-        if self._cfg.debug:
+        if self._cfg.verbose:
             outcomes = self._count_expected_outcomes(dateable)
             parts = []
             if outcomes['relocate']:
@@ -409,7 +409,7 @@ class MediaScanner:
             if walked % 5000 == 0:  # pragma: no cover
                 print(f"\r  Walked {walked:,d} files...", end="", flush=True)
         print(f"\r  Walked {walked:,d} files, {len(all_files):,d} recognised media", flush=True)
-        if self._cfg.debug and self._registry._unknown_extensions:
+        if self._cfg.verbose and self._registry._unknown_extensions:
             parts = sorted(
                 f".{ext} ({n:,d})"
                 for ext, n in self._registry._unknown_extensions.items()
@@ -662,7 +662,7 @@ class MediaScanner:
         print(f"  Pre-fetching EXIF for {n:,d} videos (ExifTool batch)...", flush=True)
 
         reader = ExifToolReader(
-            debug=self._cfg.debug, executable=self._cfg.exiftool_executable
+            verbose=self._cfg.verbose, executable=self._cfg.exiftool_executable
         )
         try:
             path_to_mf = {mf.path: mf for mf in video_files}
@@ -776,7 +776,7 @@ class MediaScanner:
                     self._evict_from_scan(cache_key, mf)
                     n_removed += 1
 
-        if self._cfg.debug:
+        if self._cfg.verbose:
             if dryrun_or_report_only:
                 self._report(
                     f"\nDupes summary: {len(dupes)} group(s), "

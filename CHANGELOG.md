@@ -7,6 +7,16 @@ All meaningful changes to the deduper codebase since the initial refactor from
 
 ## [Unreleased] — ongoing improvements
 
+### Fixed — prune misses `@eaDir` and dryrun cascade
+- `scanner.py`: `run_prune()` now filters excluded directory names (e.g.
+  `@eaDir`, the Synology metadata directory) and excluded file patterns when
+  deciding whether a directory is empty.  Previously a directory containing
+  only `@eaDir` was treated as non-empty and not pruned.
+- `scanner.py`: in dryrun mode a `virtually_removed` set tracks nominated
+  directories so that parent directories that would become empty after their
+  children are pruned are also nominated in the same pass.  Previously parents
+  were skipped because the children still existed on disk.
+
 ### Changed — parameter cleanup and simplification
 - Renamed `--debug` to `--verbose` throughout (Config field, CLI flag, INI key,
   ExifReader constructor parameter `debug=` → `verbose=`).

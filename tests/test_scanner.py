@@ -1572,6 +1572,42 @@ class TestRunPrune(unittest.TestCase):
         cfg = make_cfg(photos_path=nonexistent, do_prune=True, dryrun=False)
         MediaScanner(config=cfg, report=report).run_prune()  # Must not raise
 
+    def test_dryrun_cascade_nominates_parents(self):
+        """In dryrun mode, empty parents of nominated dirs must also be nominated."""
+        leaf = self.photos / "2021" / "09" / "29"
+        leaf.mkdir(parents=True)
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=True)
+        MediaScanner(config=cfg, report=report).run_prune()
+        text = report.render()
+        # leaf and all three ancestor dirs (09, 2021, and root's child 2021) should appear
+        self.assertIn("2021", text)
+        # All dirs still physically exist (dryrun)
+        self.assertTrue(leaf.exists())
+        # Count: leaf + 09 + 2021 = 3 would-prune lines
+        self.assertEqual(text.count("Would prune"), 3)
+
+    def test_dir_containing_only_eadir_treated_as_empty(self):
+        """A directory whose only child is @eaDir (Synology metadata) counts as empty."""
+        dated = self.photos / "2021" / "09" / "29"
+        dated.mkdir(parents=True)
+        (dated / "@eaDir").mkdir()
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertFalse(dated.exists())
+
+    def test_dir_containing_real_file_and_eadir_not_pruned(self):
+        """A directory with a real file alongside @eaDir must NOT be pruned."""
+        dated = self.photos / "2021" / "09" / "29"
+        dated.mkdir(parents=True)
+        (dated / "@eaDir").mkdir()
+        (dated / "photo.jpg").write_bytes(b"data")
+        report = Report()
+        cfg = make_cfg(photos_path=self.photos, do_prune=True, dryrun=False)
+        MediaScanner(config=cfg, report=report).run_prune()
+        self.assertTrue(dated.exists())
+
 
 # ── Date-named subdirectory handling (end-to-end) ─────────────────────────
 

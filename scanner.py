@@ -16,6 +16,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -356,26 +357,45 @@ class MediaScanner:
         """Remove empty directories from the photos and videos trees (bottom-up).
 
         Skips the root directories themselves.  Respects ``config.dryrun``.
+
+        "Empty" means no entries other than excluded directory names (e.g.
+        ``@eaDir``) and excluded file patterns (e.g. ``Thumbs.db``).  In
+        dryrun mode a virtually-removed set propagates the cascade upward so
+        parent directories that would become empty after their children are
+        pruned are also nominated.
         """
         roots = [r.resolve() for r in (self._cfg.photos_path, self._cfg.videos_path) if r]
         if not roots:
             self._report("Prune skipped: no library paths configured")
             return
 
+        exclude_dirs = self._cfg.exclude_dirs
+        exclude_re = re.compile(self._cfg.exclude_files_re, re.IGNORECASE)
+
+        def _is_empty(d: Path, virtually_removed: set) -> bool:
+            try:
+                return not any(
+                    e for e in d.iterdir()
+                    if e.resolve() not in virtually_removed
+                    and e.name not in exclude_dirs
+                    and not exclude_re.search(e.name)
+                )
+            except OSError:
+                return False
+
         n_pruned = n_would_prune = 0
         for root in roots:
             if not root.is_dir():
                 continue
+            virtually_removed: set[Path] = set()
             for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
                 d = Path(dirpath).resolve()
                 if d == root:
                     continue
-                try:
-                    if any(d.iterdir()):
-                        continue
-                except OSError:
+                if not _is_empty(d, virtually_removed):
                     continue
                 if self._cfg.dryrun:
+                    virtually_removed.add(d)
                     self._report(f"  Would prune: {d}")
                     n_would_prune += 1
                 else:
